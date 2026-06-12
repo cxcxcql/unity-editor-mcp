@@ -100,7 +100,12 @@ You can inspect discovery without starting a full MCP client session:
 ```bash
 unity-editor-mcp doctor
 unity-editor-mcp doctor --project /path/to/UnityProject
+unity-editor-mcp doctor --workspace-id <workspace-id>
+unity-editor-mcp doctor --instance <instance-id>
+unity-editor-mcp doctor --json
 ```
+
+When multiple Unity editors are open, discovery first honors explicit selectors (`--instance`, `--project`, then `--workspace-id`), then tries the Unity project and workspace ID inferred from the MCP server's current working directory. Git worktree workspace IDs are stored in Git's private worktree metadata, not in tracked project files. If Unity has a related worktree open but not the current one, discovery fails closed with `WORKTREE_MISMATCH` and shows the candidate instances.
 
 ## Testing the Connection
 

@@ -2,6 +2,8 @@ import os from 'os';
 import path from 'path';
 
 const cliProjectPath = getCliArgValue(['--project', '--unity-project']);
+const cliInstanceId = getCliArgValue(['--instance', '--unity-instance']);
+const cliWorkspaceId = getCliArgValue(['--workspace-id', '--unity-workspace-id']);
 const cliPort = getCliArgValue(['--port', '--unity-port']);
 const explicitPortValue = process.env.UNITY_PORT || cliPort;
 
@@ -20,7 +22,9 @@ export const config = {
     commandTimeout: 30000, // Command timeout in ms
     discovery: {
       enabled: process.env.UNITY_MCP_DISCOVERY !== 'false',
+      instanceId: process.env.UNITY_MCP_INSTANCE_ID || cliInstanceId || '',
       projectPath: process.env.UNITY_PROJECT_PATH || process.env.UNITY_MCP_PROJECT_PATH || cliProjectPath || '',
+      workspaceId: process.env.UNITY_MCP_WORKSPACE_ID || cliWorkspaceId || '',
       registryDir: process.env.UNITY_MCP_REGISTRY_DIR || path.join(os.homedir(), '.unity-editor-mcp', 'instances'),
       staleAfterMs: parseInt(process.env.UNITY_MCP_STALE_AFTER_MS, 10) || 30000,
       cwd: process.cwd()

@@ -15,7 +15,14 @@ describe('PingToolHandler', () => {
       message: 'pong',
       echo: 'test',
       timestamp: '2024-01-01T00:00:00.000Z',
-      unityVersion: '2022.3.0f1'
+      unityVersion: '2022.3.0f1',
+      projectPath: '/tmp/TestProject',
+      workspaceId: 'workspace-123',
+      workspaceIdSource: 'git',
+      git: {
+        commonDir: '/tmp/TestProject/.git',
+        branch: 'main'
+      }
     }));
 
     // Create mock Unity connection
@@ -75,6 +82,13 @@ describe('PingToolHandler', () => {
       assert.equal(result.echo, 'test');
       assert.equal(result.timestamp, '2024-01-01T00:00:00.000Z');
       assert.equal(result.unityVersion, '2022.3.0f1');
+      assert.equal(result.projectPath, '/tmp/TestProject');
+      assert.equal(result.workspaceId, 'workspace-123');
+      assert.equal(result.workspaceIdSource, 'git');
+      assert.deepEqual(result.git, {
+        commonDir: '/tmp/TestProject/.git',
+        branch: 'main'
+      });
     });
 
     it('should use default echo if not provided by Unity', async () => {

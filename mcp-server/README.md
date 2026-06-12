@@ -72,20 +72,25 @@ Add to your `claude_desktop_config.json`:
 
 ### Multiple Unity Instances
 
-The Unity package writes live instance metadata automatically to `~/.unity-editor-mcp/instances`. The Node server reads those files to select the correct Unity project. You do not write this registry manually.
+The Unity package writes live instance metadata automatically to `~/.unity-editor-mcp/instances`. The Node server reads those files to select the correct Unity project/worktree. You do not write this registry manually.
 
 Selection order:
 
 1. `UNITY_PORT` or `--port`
-2. `UNITY_PROJECT_PATH`, `UNITY_MCP_PROJECT_PATH`, or `--project`
-3. Unity project inferred from the current working directory
-4. the only live Unity MCP instance
+2. `UNITY_MCP_INSTANCE_ID` or `--instance`
+3. `UNITY_PROJECT_PATH`, `UNITY_MCP_PROJECT_PATH`, or `--project`
+4. `UNITY_MCP_WORKSPACE_ID` or `--workspace-id`
+5. Unity project inferred from the current working directory
+6. workspace ID inferred from the current working directory
+7. the only live Unity MCP instance
 
-If multiple Unity projects are open and no target can be inferred, the server fails closed and lists candidates instead of connecting to the wrong editor.
+For Git worktrees, the workspace ID is stored under Git's private worktree metadata with `git rev-parse --git-path unity-editor-mcp/workspace-id`. For non-Git projects it is stored under `Library/UnityEditorMCP/workspace-id`. If related worktrees from the same Git repository are open but none match the current worktree, discovery fails closed with `WORKTREE_MISMATCH` and lists candidates instead of connecting to the wrong editor.
 
 ```bash
 unity-editor-mcp doctor
 unity-editor-mcp doctor --project /path/to/UnityProject
+unity-editor-mcp doctor --workspace-id <workspace-id>
+unity-editor-mcp doctor --instance <instance-id>
 unity-editor-mcp doctor --json
 ```
 

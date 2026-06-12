@@ -13,9 +13,17 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
       {
         type: 'object',
         properties: {
+          instanceId: {
+            type: 'string',
+            description: 'Optional Unity Editor MCP instance ID to select exactly'
+          },
           projectPath: {
             type: 'string',
             description: 'Optional Unity project path to use when selecting an instance'
+          },
+          workspaceId: {
+            type: 'string',
+            description: 'Optional Unity Editor MCP workspace ID to select exactly'
           }
         },
         required: []
@@ -30,7 +38,9 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
       ...config.unity,
       discovery: {
         ...config.unity.discovery,
-        projectPath: params.projectPath || config.unity.discovery.projectPath
+        instanceId: params.instanceId || config.unity.discovery.instanceId,
+        projectPath: params.projectPath || config.unity.discovery.projectPath,
+        workspaceId: params.workspaceId || config.unity.discovery.workspaceId
       }
     };
 
@@ -42,11 +52,19 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
     return {
       registryDir: report.registryDir,
       targetProjectPath: report.targetProjectPath,
+      targetWorkspaceId: report.targetWorkspaceId,
+      localWorkspace: report.localWorkspace,
       selectedEndpoint: report.endpoint,
       selectionError: report.error,
+      selectionErrorCode: report.errorCode,
       instances: report.instances.map((instance) => ({
+        schemaVersion: instance.schemaVersion,
+        instanceId: instance.instanceId,
         projectPath: instance.projectPath,
         projectName: instance.projectName,
+        workspaceId: instance.workspaceId,
+        workspaceIdSource: instance.workspaceIdSource,
+        git: instance.git,
         pid: instance.pid,
         host: instance.host,
         port: instance.port,

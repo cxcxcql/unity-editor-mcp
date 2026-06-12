@@ -1,15 +1,21 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import fsp from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { promisify } from 'util';
 import {
+  createDiscoveryReport,
   findUnityProjectRoot,
+  getLocalWorkspaceIdentity,
   normalizeProjectPath,
   readUnityInstances,
   resolveUnityEndpoint,
   selectUnityInstance
 } from '../../../src/core/unityDiscovery.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('Unity discovery', () => {
   let tempDir;
@@ -82,6 +88,139 @@ describe('Unity discovery', () => {
     assert.equal(selection.reason, 'explicit project path');
   });
 
+  it('selects the instance matching an explicit instance ID', () => {
+    const projectA = path.join(tempDir, 'ProjectA');
+    const projectB = path.join(tempDir, 'ProjectB');
+    const instances = [
+      { ...createInstance(projectA, 50123), instanceId: 'unity-a' },
+      { ...createInstance(projectB, 50124), instanceId: 'unity-b' }
+    ];
+
+    const selection = selectUnityInstance(instances, { instanceId: 'unity-b' });
+
+    assert.equal(selection.instance.projectPath, projectB);
+    assert.equal(selection.reason, 'explicit instance ID');
+  });
+
+  it('selects the instance matching an explicit workspace ID', () => {
+    const projectA = path.join(tempDir, 'ProjectA');
+    const projectB = path.join(tempDir, 'ProjectB');
+    const instances = [
+      { ...createInstance(projectA, 50123), workspaceId: 'workspace-a' },
+      { ...createInstance(projectB, 50124), workspaceId: 'workspace-b' }
+    ];
+
+    const selection = selectUnityInstance(instances, { workspaceId: 'workspace-b' });
+
+    assert.equal(selection.instance.projectPath, projectB);
+    assert.equal(selection.reason, 'explicit workspace ID');
+  });
+
+  it('refuses to select a different worktree from the same Git repository', () => {
+    const targetProject = path.join(tempDir, 'TargetProject');
+    const openProject = path.join(tempDir, 'OpenProject');
+    const instances = [
+      {
+        ...createInstance(openProject, 50123),
+        workspaceId: 'open-workspace',
+        git: {
+          commonDir: path.join(tempDir, 'repo', '.git'),
+          gitDir: path.join(tempDir, 'repo', '.git', 'worktrees', 'open'),
+          branch: 'codex/open'
+        }
+      }
+    ];
+
+    assert.throws(
+      () => selectUnityInstance(instances, {
+        localWorkspace: {
+          projectPath: targetProject,
+          normalizedProjectPath: normalizeProjectPath(targetProject),
+          workspaceId: 'target-workspace',
+          git: {
+            commonDir: path.join(tempDir, 'repo', '.git'),
+            gitDir: path.join(tempDir, 'repo', '.git', 'worktrees', 'target'),
+            branch: 'codex/target'
+          }
+        }
+      }),
+      (error) => {
+        assert.equal(error.code, 'WORKTREE_MISMATCH');
+        assert.match(error.message, /same Git repository/i);
+        assert.match(error.message, /OpenProject/);
+        return true;
+      }
+    );
+  });
+
+  it('keeps single live instance fallback for unrelated projects', () => {
+    const openProject = path.join(tempDir, 'OpenProject');
+    const instances = [
+      {
+        ...createInstance(openProject, 50123),
+        workspaceId: 'open-workspace',
+        git: {
+          commonDir: path.join(tempDir, 'other-repo', '.git')
+        }
+      }
+    ];
+
+    const selection = selectUnityInstance(instances, {
+      localWorkspace: {
+        projectPath: path.join(tempDir, 'TargetProject'),
+        normalizedProjectPath: normalizeProjectPath(path.join(tempDir, 'TargetProject')),
+        workspaceId: 'target-workspace',
+        git: {
+          commonDir: path.join(tempDir, 'repo', '.git')
+        }
+      }
+    });
+
+    assert.equal(selection.instance.projectPath, openProject);
+    assert.equal(selection.reason, 'single live Unity instance');
+  });
+
+  it('reports the WORKTREE_MISMATCH code for related worktree candidates', async () => {
+    const commonDir = path.join(tempDir, 'repo', '.git');
+    await writeInstance('open.json', {
+      projectPath: path.join(tempDir, 'OpenProject'),
+      workspaceId: 'open-workspace',
+      git: {
+        commonDir,
+        gitDir: path.join(commonDir, 'worktrees', 'open'),
+        branch: 'codex/open'
+      },
+      pid: process.pid,
+      port: 50123,
+      lastSeen: new Date().toISOString()
+    });
+
+    const report = await createDiscoveryReport({
+      unityConfig: {
+        host: 'localhost',
+        port: 6400,
+        discovery: {
+          registryDir,
+          enabled: true
+        }
+      },
+      cwd: tempDir,
+      localWorkspace: {
+        projectPath: path.join(tempDir, 'TargetProject'),
+        workspaceId: 'target-workspace',
+        git: {
+          commonDir,
+          gitDir: path.join(commonDir, 'worktrees', 'target'),
+          branch: 'codex/target'
+        }
+      }
+    });
+
+    assert.equal(report.endpoint, null);
+    assert.equal(report.errorCode, 'WORKTREE_MISMATCH');
+    assert.match(report.error, /same Git repository/i);
+  });
+
   it('refuses to guess when multiple live instances are available', () => {
     const instances = [
       createInstance(path.join(tempDir, 'ProjectA'), 50123),
@@ -126,9 +265,43 @@ describe('Unity discovery', () => {
     assert.equal(endpoint.source, 'explicit-port');
   });
 
+  it('reads stable distinct workspace IDs from Git main and linked worktrees', async (t) => {
+    try {
+      await execFileAsync('git', ['--version']);
+    } catch {
+      t.skip('git is not available');
+      return;
+    }
+
+    const repoPath = path.join(tempDir, 'RepoProject');
+    const linkedPath = path.join(tempDir, 'RepoProject-linked');
+    await fsp.mkdir(path.join(repoPath, 'Assets'), { recursive: true });
+    await fsp.mkdir(path.join(repoPath, 'ProjectSettings'), { recursive: true });
+    await fsp.writeFile(path.join(repoPath, 'Assets', '.keep'), '');
+    await fsp.writeFile(path.join(repoPath, 'ProjectSettings', 'ProjectVersion.txt'), 'm_EditorVersion: 6000.3.11f1\n');
+
+    await execFileAsync('git', ['init', '-q'], { cwd: repoPath });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoPath });
+    await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repoPath });
+    await execFileAsync('git', ['add', 'Assets', 'ProjectSettings'], { cwd: repoPath });
+    await execFileAsync('git', ['commit', '-qm', 'init'], { cwd: repoPath });
+    await execFileAsync('git', ['worktree', 'add', '-q', linkedPath, '-b', 'linked'], { cwd: repoPath });
+
+    const mainIdentity = await getLocalWorkspaceIdentity(repoPath);
+    const linkedIdentity = await getLocalWorkspaceIdentity(linkedPath);
+    const mainIdentityAgain = await getLocalWorkspaceIdentity(repoPath);
+
+    assert.equal(mainIdentity.projectPath, repoPath);
+    assert.equal(linkedIdentity.projectPath, linkedPath);
+    assert.equal(mainIdentity.workspaceId, mainIdentityAgain.workspaceId);
+    assert.notEqual(mainIdentity.workspaceId, linkedIdentity.workspaceId);
+    assert.equal(mainIdentity.git.commonDir, linkedIdentity.git.commonDir);
+    assert.notEqual(mainIdentity.git.gitDir, linkedIdentity.git.gitDir);
+  });
+
   async function writeInstance(fileName, data) {
     await fsp.writeFile(path.join(registryDir, fileName), JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       host: '127.0.0.1',
       unityVersion: '6000.3.11f1',
       packageVersion: '0.15.4',

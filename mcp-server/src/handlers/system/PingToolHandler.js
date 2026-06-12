@@ -47,6 +47,9 @@ export class PingToolHandler extends BaseToolHandler {
       timestamp: result.timestamp || new Date().toISOString(),
       unityVersion: result.unityVersion,
       projectPath: result.projectPath,
+      workspaceId: result.workspaceId,
+      workspaceIdSource: result.workspaceIdSource,
+      git: result.git,
       port: result.port,
       packageVersion: result.packageVersion,
       connection: this.unityConnection.getConnectionInfo ? this.unityConnection.getConnectionInfo() : undefined

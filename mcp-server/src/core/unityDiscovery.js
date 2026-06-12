@@ -1,10 +1,15 @@
+import { execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import net from 'net';
 import os from 'os';
 import path from 'path';
+import { promisify } from 'util';
 
 const DEFAULT_STALE_AFTER_MS = 30000;
+const WORKSPACE_ID_RELATIVE_PATH = path.join('unity-editor-mcp', 'workspace-id');
+const execFileAsync = promisify(execFile);
 
 export function getDefaultRegistryDir() {
   return path.join(os.homedir(), '.unity-editor-mcp', 'instances');
@@ -49,6 +54,57 @@ export function findUnityProjectRoot(startDir = process.cwd()) {
   }
 }
 
+export async function getLocalWorkspaceIdentity(startDir = process.cwd()) {
+  const projectPath = findUnityProjectRoot(startDir);
+  if (!projectPath) {
+    return null;
+  }
+
+  const git = await readGitMetadata(projectPath);
+  const workspaceIdInfo = git
+    ? await ensureWorkspaceId(git.workspaceIdPath, 'git')
+    : await ensureWorkspaceId(path.join(projectPath, 'Library', 'UnityEditorMCP', 'workspace-id'), 'library');
+
+  return {
+    projectPath,
+    normalizedProjectPath: normalizeProjectPath(projectPath),
+    workspaceId: workspaceIdInfo.workspaceId,
+    workspaceIdSource: workspaceIdInfo.source,
+    workspaceIdPath: workspaceIdInfo.path,
+    git
+  };
+}
+
+export async function readGitMetadata(projectPath) {
+  try {
+    const [core, branch, head] = await Promise.all([
+      runGit(projectPath, ['rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir', '--git-path', WORKSPACE_ID_RELATIVE_PATH]),
+      runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ''),
+      runGit(projectPath, ['rev-parse', '--verify', 'HEAD']).catch(() => '')
+    ]);
+
+    const [topLevel, gitDir, commonDir, workspaceIdPath] = core.split('\n').filter(Boolean);
+    if (!topLevel || !gitDir || !commonDir || !workspaceIdPath) {
+      return null;
+    }
+
+    const absoluteGitDir = resolveGitPath(projectPath, gitDir);
+    const absoluteCommonDir = resolveGitPath(projectPath, commonDir);
+
+    return {
+      topLevel: normalizeProjectPath(topLevel),
+      gitDir: trimTrailingSeparator(absoluteGitDir),
+      commonDir: trimTrailingSeparator(absoluteCommonDir),
+      worktreeName: getWorktreeName(absoluteGitDir, absoluteCommonDir),
+      branch: branch || null,
+      head: head || null,
+      workspaceIdPath: resolveGitPath(projectPath, workspaceIdPath)
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function readUnityInstances(options = {}) {
   const registryDir = options.registryDir || getDefaultRegistryDir();
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
@@ -87,6 +143,7 @@ export async function readUnityInstances(options = {}) {
         registryPath: filePath,
         registryDirectory: registryDir,
         normalizedProjectPath: normalizeProjectPath(data.projectPath),
+        normalizedGitCommonDir: normalizeMetadataPath(data.git?.commonDir),
         stale,
         alive
       });
@@ -100,8 +157,62 @@ export async function readUnityInstances(options = {}) {
 
 export function selectUnityInstance(instances, options = {}) {
   const liveInstances = instances.filter((instance) => !instance.stale && instance.alive);
+  const explicitInstanceId = normalizeSelector(options.instanceId);
   const explicitProjectPath = normalizeProjectPath(options.projectPath);
-  const inferredProjectPath = explicitProjectPath || findUnityProjectRoot(options.cwd);
+  const explicitWorkspaceId = normalizeSelector(options.workspaceId);
+  const localWorkspace = options.localWorkspace || null;
+  const inferredProjectPath =
+    normalizeProjectPath(localWorkspace?.projectPath) ||
+    findUnityProjectRoot(options.cwd);
+  const inferredWorkspaceId = normalizeSelector(localWorkspace?.workspaceId);
+
+  if (explicitInstanceId) {
+    const match = liveInstances.find((instance) => instance.instanceId === explicitInstanceId);
+    if (match) {
+      return {
+        instance: match,
+        reason: 'explicit instance ID'
+      };
+    }
+
+    throw new Error(
+      `No Unity Editor MCP instance found for instance ID: ${explicitInstanceId}\n\n` +
+      formatInstanceCandidates(liveInstances)
+    );
+  }
+
+  if (explicitProjectPath) {
+    const matches = liveInstances.filter((instance) =>
+      pathsEqual(instance.normalizedProjectPath, explicitProjectPath)
+    );
+
+    if (matches.length > 0) {
+      return {
+        instance: matches[0],
+        reason: 'explicit project path'
+      };
+    }
+
+    throw new Error(
+      `No Unity Editor MCP instance found for project: ${explicitProjectPath}\n\n` +
+      formatInstanceCandidates(liveInstances)
+    );
+  }
+
+  if (explicitWorkspaceId) {
+    const match = liveInstances.find((instance) => normalizeSelector(instance.workspaceId) === explicitWorkspaceId);
+    if (match) {
+      return {
+        instance: match,
+        reason: 'explicit workspace ID'
+      };
+    }
+
+    throw new Error(
+      `No Unity Editor MCP instance found for workspace ID: ${explicitWorkspaceId}\n\n` +
+      formatInstanceCandidates(liveInstances)
+    );
+  }
 
   if (inferredProjectPath) {
     const matches = liveInstances.filter((instance) =>
@@ -111,16 +222,24 @@ export function selectUnityInstance(instances, options = {}) {
     if (matches.length > 0) {
       return {
         instance: matches[0],
-        reason: explicitProjectPath ? 'explicit project path' : 'current Unity project'
+        reason: 'current Unity project'
       };
     }
+  }
 
-    if (explicitProjectPath) {
-      throw new Error(
-        `No Unity Editor MCP instance found for project: ${inferredProjectPath}\n\n` +
-        formatInstanceCandidates(liveInstances)
-      );
+  if (inferredWorkspaceId) {
+    const match = liveInstances.find((instance) => normalizeSelector(instance.workspaceId) === inferredWorkspaceId);
+    if (match) {
+      return {
+        instance: match,
+        reason: 'current workspace ID'
+      };
     }
+  }
+
+  const mismatchCandidates = findSameRepositoryCandidates(liveInstances, localWorkspace);
+  if (mismatchCandidates.length > 0) {
+    throw createWorktreeMismatchError(localWorkspace, mismatchCandidates);
   }
 
   if (liveInstances.length === 1) {
@@ -160,9 +279,16 @@ export async function resolveUnityEndpoint(options = {}) {
     staleAfterMs: discoveryConfig.staleAfterMs
   });
 
+  const identityStart = discoveryConfig.projectPath || discoveryConfig.cwd || options.cwd || process.cwd();
+  const localWorkspace = options.localWorkspace === undefined
+    ? await getLocalWorkspaceIdentity(identityStart)
+    : options.localWorkspace;
   const selection = selectUnityInstance(instances, {
+    instanceId: discoveryConfig.instanceId,
     projectPath: discoveryConfig.projectPath,
-    cwd: discoveryConfig.cwd || options.cwd || process.cwd()
+    workspaceId: discoveryConfig.workspaceId,
+    cwd: discoveryConfig.cwd || options.cwd || process.cwd(),
+    localWorkspace
   });
 
   if (!selection) {
@@ -195,17 +321,29 @@ export async function createDiscoveryReport(options = {}) {
 
   let endpoint = null;
   let error = null;
+  let errorCode = null;
+  const identityStart = discoveryConfig.projectPath || discoveryConfig.cwd || options.cwd || process.cwd();
+  const localWorkspace = options.localWorkspace === undefined
+    ? await getLocalWorkspaceIdentity(identityStart)
+    : options.localWorkspace;
   try {
-    endpoint = await resolveUnityEndpoint(options);
+    endpoint = await resolveUnityEndpoint({
+      ...options,
+      localWorkspace
+    });
   } catch (selectionError) {
     error = selectionError.message;
+    errorCode = selectionError.code || null;
   }
 
   return {
     registryDir,
     targetProjectPath: normalizeProjectPath(discoveryConfig.projectPath) || findUnityProjectRoot(discoveryConfig.cwd || options.cwd),
+    targetWorkspaceId: normalizeSelector(discoveryConfig.workspaceId) || localWorkspace?.workspaceId || null,
+    localWorkspace,
     endpoint,
     error,
+    errorCode,
     instances
   };
 }
@@ -215,6 +353,7 @@ export function formatDiscoveryReport(report) {
     'Unity Editor MCP discovery report',
     `Registry: ${report.registryDir}`,
     `Target project: ${report.targetProjectPath || '(not inferred)'}`,
+    `Target workspace: ${report.targetWorkspaceId || '(not inferred)'}`,
     ''
   ];
 
@@ -226,7 +365,8 @@ export function formatDiscoveryReport(report) {
       lines.push(
         `- ${instance.projectPath || '(unknown project)'} ` +
         `(pid ${instance.pid}, ${instance.host || '127.0.0.1'}:${instance.port}, ` +
-        `${instance.alive ? 'alive' : 'dead'}, ${instance.stale ? 'stale' : 'fresh'})`
+        `${instance.alive ? 'alive' : 'dead'}, ${instance.stale ? 'stale' : 'fresh'}, ` +
+        `workspace ${instance.workspaceId || 'unknown'})`
       );
     }
   }
@@ -239,7 +379,7 @@ export function formatDiscoveryReport(report) {
       lines.push(`Selected project: ${report.endpoint.projectPath}`);
     }
   } else {
-    lines.push(`Selection error: ${report.error}`);
+    lines.push(`Selection error: ${report.errorCode ? `[${report.errorCode}] ` : ''}${report.error}`);
   }
 
   return lines.join('\n');
@@ -284,9 +424,111 @@ export function formatInstanceCandidates(instances) {
     'Available Unity Editor MCP instances:',
     ...instances.map((instance) =>
       `- ${instance.projectPath || '(unknown project)'} ` +
-      `(pid ${instance.pid}, ${instance.host || '127.0.0.1'}:${instance.port}, Unity ${instance.unityVersion || 'unknown'})`
+      `(pid ${instance.pid}, ${instance.host || '127.0.0.1'}:${instance.port}, ` +
+      `Unity ${instance.unityVersion || 'unknown'}, workspace ${instance.workspaceId || 'unknown'}, ` +
+      `branch ${instance.git?.branch || 'unknown'})`
     )
   ].join('\n');
+}
+
+async function runGit(projectPath, args) {
+  const { stdout } = await execFileAsync('git', ['-C', projectPath, ...args], {
+    timeout: 3000
+  });
+  return stdout.trim();
+}
+
+async function ensureWorkspaceId(filePath, source) {
+  const existing = await readWorkspaceId(filePath);
+  if (existing) {
+    return {
+      workspaceId: existing,
+      source,
+      path: filePath
+    };
+  }
+
+  const workspaceId = randomUUID();
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  await fsp.writeFile(filePath, `${workspaceId}\n`, { mode: 0o600 });
+
+  return {
+    workspaceId,
+    source,
+    path: filePath
+  };
+}
+
+async function readWorkspaceId(filePath) {
+  try {
+    const value = (await fsp.readFile(filePath, 'utf8')).trim();
+    return value || null;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function resolveGitPath(projectPath, gitPath) {
+  const resolved = path.isAbsolute(gitPath) ? path.resolve(gitPath) : path.resolve(projectPath, gitPath);
+  try {
+    return trimTrailingSeparator(fs.realpathSync.native(resolved));
+  } catch {
+    return trimTrailingSeparator(resolved);
+  }
+}
+
+function getWorktreeName(gitDir, commonDir) {
+  const worktreesDir = path.join(commonDir, 'worktrees');
+  const relative = path.relative(worktreesDir, gitDir);
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    return relative.split(path.sep)[0];
+  }
+
+  return 'main';
+}
+
+function findSameRepositoryCandidates(instances, localWorkspace) {
+  const localCommonDir = normalizeMetadataPath(localWorkspace?.git?.commonDir);
+  if (!localCommonDir) {
+    return [];
+  }
+
+  return instances.filter((instance) =>
+    pathsEqual(normalizeMetadataPath(instance.git?.commonDir), localCommonDir)
+  );
+}
+
+function createWorktreeMismatchError(localWorkspace, candidates) {
+  const error = new Error(
+    'Unity Editor MCP found editor instances from the same Git repository, but none match the current worktree.\n\n' +
+    `Current project: ${localWorkspace?.projectPath || '(unknown)'}\n` +
+    `Current workspace: ${localWorkspace?.workspaceId || '(unknown)'}\n\n` +
+    formatInstanceCandidates(candidates) +
+    '\nOpen the matching Unity worktree, pass --project <path>, or pass --instance <id>.'
+  );
+  error.code = 'WORKTREE_MISMATCH';
+  error.candidates = candidates;
+  return error;
+}
+
+function normalizeSelector(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function normalizeMetadataPath(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+
+  const resolved = path.resolve(value);
+  try {
+    return trimTrailingSeparator(fs.realpathSync.native(resolved));
+  } catch {
+    return trimTrailingSeparator(resolved);
+  }
 }
 
 function pathsEqual(a, b) {

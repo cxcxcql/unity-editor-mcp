@@ -397,6 +397,9 @@ namespace UnityEditorMCP.Core
                             timestamp = System.DateTime.UtcNow.ToString("o"),
                             unityVersion = Application.unityVersion,
                             projectPath = UnityInstanceRegistry.ProjectPath,
+                            workspaceId = UnityInstanceRegistry.WorkspaceId,
+                            workspaceIdSource = UnityInstanceRegistry.WorkspaceIdSource,
+                            git = UnityInstanceRegistry.GitInfo,
                             port = currentPort,
                             packageVersion = UnityInstanceRegistry.PackageVersion
                         };
