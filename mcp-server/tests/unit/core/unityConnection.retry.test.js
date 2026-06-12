@@ -18,6 +18,11 @@ describe('UnityConnection Retry Logic', () => {
     config.unity.reconnectDelay = 100;
     config.unity.maxReconnectDelay = 500;
     config.unity.commandTimeout = 1000;
+    config.unity.hasExplicitPort = true;
+    config.unity.discovery = {
+      ...config.unity.discovery,
+      enabled: false
+    };
     
     connection = new UnityConnection();
   });
@@ -184,7 +189,9 @@ describe('UnityConnection Retry Logic', () => {
 
       assert(connectionError, 'Should have connection error');
       assert(connectionError.message.includes('Connection timeout') || 
-             connectionError.message.includes('ECONNREFUSED'), 
+             connectionError.message.includes('ECONNREFUSED') ||
+             connectionError.code === 'ECONNREFUSED' ||
+             connectionError.name === 'AggregateError',
              'Should be timeout or connection refused');
     });
 
@@ -283,13 +290,13 @@ describe('UnityConnection Retry Logic', () => {
         if (acceptConnections) {
           socket.on('data', (data) => {
             try {
-              const cmd = JSON.parse(data.toString());
+              const cmd = parseFramedMessage(data);
               const response = {
                 id: cmd.id,
                 success: true,
                 data: { echo: cmd.type }
               };
-              socket.write(JSON.stringify(response) + '\n');
+              socket.write(frameMessage(response));
             } catch (e) {
               // Ignore
             }
@@ -332,3 +339,15 @@ describe('UnityConnection Retry Logic', () => {
     });
   });
 });
+
+function frameMessage(message) {
+  const payload = Buffer.from(JSON.stringify(message), 'utf8');
+  const header = Buffer.allocUnsafe(4);
+  header.writeInt32BE(payload.length, 0);
+  return Buffer.concat([header, payload]);
+}
+
+function parseFramedMessage(buffer) {
+  const messageLength = buffer.readInt32BE(0);
+  return JSON.parse(buffer.slice(4, 4 + messageLength).toString('utf8'));
+}

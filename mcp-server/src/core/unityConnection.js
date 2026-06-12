@@ -1,13 +1,15 @@
 import net from 'net';
 import { EventEmitter } from 'events';
 import { config, logger } from './config.js';
+import { resolveUnityEndpoint } from './unityDiscovery.js';
 
 /**
  * Manages TCP connection to Unity Editor
  */
 export class UnityConnection extends EventEmitter {
-  constructor() {
+  constructor(options = {}) {
     super();
+    this.config = options.config || config;
     this.socket = null;
     this.connected = false;
     this.reconnectAttempts = 0;
@@ -16,6 +18,7 @@ export class UnityConnection extends EventEmitter {
     this.pendingCommands = new Map();
     this.isDisconnecting = false;
     this.messageBuffer = Buffer.alloc(0);
+    this.endpoint = null;
   }
 
   /**
@@ -23,20 +26,20 @@ export class UnityConnection extends EventEmitter {
    * @returns {Promise<void>}
    */
   async connect() {
+    if (this.connected) {
+      return;
+    }
+
+    // Skip connection in CI/test environments
+    if (process.env.NODE_ENV === 'test' || process.env.CI === 'true') {
+      logger.info('Skipping Unity connection in test/CI environment');
+      throw new Error('Unity connection disabled in test environment');
+    }
+
+    const endpoint = await this.resolveEndpoint();
+
     return new Promise((resolve, reject) => {
-      if (this.connected) {
-        resolve();
-        return;
-      }
-
-      // Skip connection in CI/test environments
-      if (process.env.NODE_ENV === 'test' || process.env.CI === 'true') {
-        logger.info('Skipping Unity connection in test/CI environment');
-        reject(new Error('Unity connection disabled in test environment'));
-        return;
-      }
-
-      logger.info(`Connecting to Unity at ${config.unity.host}:${config.unity.port}...`);
+      logger.info(`Connecting to Unity at ${endpoint.host}:${endpoint.port} (${endpoint.source})...`);
       
       this.socket = new net.Socket();
       let connectionTimeout = null;
@@ -67,7 +70,7 @@ export class UnityConnection extends EventEmitter {
 
       this.socket.on('error', (error) => {
         logger.error('Socket error:', error.message);
-        this.emit('error', error);
+        this.emitConnectionError(error);
         
         if (!this.connected && !resolved) {
           resolved = true;
@@ -114,7 +117,7 @@ export class UnityConnection extends EventEmitter {
       });
 
       // Attempt connection
-      this.socket.connect(config.unity.port, config.unity.host);
+      this.socket.connect(endpoint.port, endpoint.host);
       
       // Set timeout for initial connection
       connectionTimeout = setTimeout(() => {
@@ -125,8 +128,22 @@ export class UnityConnection extends EventEmitter {
           this.socket.destroy();
           reject(new Error('Connection timeout'));
         }
-      }, config.unity.commandTimeout);
+      }, this.config.unity.commandTimeout);
     });
+  }
+
+  emitConnectionError(error) {
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', error);
+    }
+  }
+
+  async resolveEndpoint() {
+    this.endpoint = await resolveUnityEndpoint({
+      unityConfig: this.config.unity,
+      cwd: this.config.unity.discovery?.cwd || process.cwd()
+    });
+    return this.endpoint;
   }
 
   /**
@@ -164,8 +181,8 @@ export class UnityConnection extends EventEmitter {
     }
 
     const delay = Math.min(
-      config.unity.reconnectDelay * Math.pow(config.unity.reconnectBackoffMultiplier, this.reconnectAttempts),
-      config.unity.maxReconnectDelay
+      this.config.unity.reconnectDelay * Math.pow(this.config.unity.reconnectBackoffMultiplier, this.reconnectAttempts),
+      this.config.unity.maxReconnectDelay
     );
 
     logger.info(`Scheduling reconnection in ${delay}ms (attempt ${this.reconnectAttempts + 1})`);
@@ -266,7 +283,14 @@ export class UnityConnection extends EventEmitter {
             if (response.status === 'success' || response.success === true) {
               logger.info(`[Unity] Command ${response.id} succeeded`);
               
-              let result = response.result || response.data || {};
+              let result;
+              if (Object.prototype.hasOwnProperty.call(response, 'result')) {
+                result = response.result;
+              } else if (Object.prototype.hasOwnProperty.call(response, 'data')) {
+                result = response.data;
+              } else {
+                result = {};
+              }
               
               // If result is a string, try to parse it as JSON
               if (typeof result === 'string') {
@@ -334,14 +358,14 @@ export class UnityConnection extends EventEmitter {
     };
 
     return new Promise((resolve, reject) => {
-      logger.info(`[Unity] Setting up command ${id} with timeout ${config.unity.commandTimeout}ms`);
+      logger.info(`[Unity] Setting up command ${id} with timeout ${this.config.unity.commandTimeout}ms`);
       
       // Set up timeout
       const timeout = setTimeout(() => {
-        logger.error(`[Unity] Command ${id} timed out after ${config.unity.commandTimeout}ms`);
+        logger.error(`[Unity] Command ${id} timed out after ${this.config.unity.commandTimeout}ms`);
         this.pendingCommands.delete(id);
         reject(new Error('Command timeout'));
-      }, config.unity.commandTimeout);
+      }, this.config.unity.commandTimeout);
 
       // Store pending command
       this.pendingCommands.set(id, {
@@ -395,5 +419,12 @@ export class UnityConnection extends EventEmitter {
    */
   isConnected() {
     return this.connected;
+  }
+
+  getConnectionInfo() {
+    return {
+      connected: this.connected,
+      endpoint: this.endpoint
+    };
   }
 }

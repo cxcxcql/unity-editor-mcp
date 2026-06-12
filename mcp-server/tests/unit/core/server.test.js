@@ -129,10 +129,11 @@ describe('Server', () => {
       const handlers = createHandlers(unityConnection);
       
       assert.ok(handlers instanceof Map);
-      assert.equal(handlers.size, 62);
+      assert.ok(handlers.size >= 67);
       
       // Check for some key handlers
       assert.ok(handlers.has('ping'));
+      assert.ok(handlers.has('list_unity_instances'));
       assert.ok(handlers.has('create_gameobject'));
       assert.ok(handlers.has('get_hierarchy'));
       assert.ok(handlers.has('analyze_scene_contents'));

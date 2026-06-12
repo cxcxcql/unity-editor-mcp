@@ -45,7 +45,11 @@ export class PingToolHandler extends BaseToolHandler {
       message: result.message,
       echo: result.echo || params.message || 'ping',
       timestamp: result.timestamp || new Date().toISOString(),
-      unityVersion: result.unityVersion
+      unityVersion: result.unityVersion,
+      projectPath: result.projectPath,
+      port: result.port,
+      packageVersion: result.packageVersion,
+      connection: this.unityConnection.getConnectionInfo ? this.unityConnection.getConnectionInfo() : undefined
     };
   }
 }

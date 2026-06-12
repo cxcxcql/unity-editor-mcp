@@ -8,9 +8,24 @@ describe('UnityConnection', () => {
   let connection;
   let mockSocket;
   let originalSocket;
+  let testConfig;
 
   beforeEach(() => {
-    connection = new UnityConnection();
+    testConfig = {
+      unity: {
+        host: 'localhost',
+        port: 6400,
+        hasExplicitPort: true,
+        reconnectDelay: 10,
+        maxReconnectDelay: 100,
+        reconnectBackoffMultiplier: 2,
+        commandTimeout: 50,
+        discovery: {
+          enabled: false
+        }
+      }
+    };
+    connection = new UnityConnection({ config: testConfig });
     mockSocket = new EventEmitter();
     mockSocket.write = mock.fn((data, callback) => {
       if (callback) callback();
@@ -173,7 +188,7 @@ describe('UnityConnection', () => {
       // Verify command was sent
       assert.equal(mockSocket.write.mock.calls.length, 1);
       const sentData = mockSocket.write.mock.calls[0].arguments[0];
-      const command = JSON.parse(sentData);
+      const command = parseFramedMessage(sentData);
       
       assert.equal(command.id, '1');
       assert.equal(command.type, 'ping');
@@ -185,7 +200,7 @@ describe('UnityConnection', () => {
         status: 'success',
         data: { message: 'pong' }
       };
-      mockSocket.emit('data', Buffer.from(JSON.stringify(response)));
+      mockSocket.emit('data', frameMessage(response));
       
       const result = await sendPromise;
       assert.deepEqual(result, { message: 'pong' });
@@ -223,7 +238,7 @@ describe('UnityConnection', () => {
         status: 'error',
         error: 'Unknown command'
       };
-      mockSocket.emit('data', Buffer.from(JSON.stringify(response)));
+      mockSocket.emit('data', frameMessage(response));
       
       await assert.rejects(
         sendPromise,
@@ -242,18 +257,21 @@ describe('UnityConnection', () => {
       await connectPromise;
     });
 
-    it('should send raw ping string', async () => {
+    it('should send framed ping command', async () => {
       const pingPromise = connection.ping();
       
       assert.equal(mockSocket.write.mock.calls.length, 1);
-      assert.equal(mockSocket.write.mock.calls[0].arguments[0], 'ping');
+      const command = parseFramedMessage(mockSocket.write.mock.calls[0].arguments[0]);
+      assert.equal(command.id, '1');
+      assert.equal(command.type, 'ping');
       
       // Simulate pong response
       const response = {
+        id: '1',
         status: 'success',
         data: { message: 'pong', timestamp: '2025-06-21T10:00:00Z' }
       };
-      mockSocket.emit('data', Buffer.from(JSON.stringify(response)));
+      mockSocket.emit('data', frameMessage(response));
       
       const result = await pingPromise;
       assert.equal(result.message, 'pong');
@@ -261,9 +279,16 @@ describe('UnityConnection', () => {
     });
 
     it('should timeout if no pong received', async () => {
+      const pingPromise = connection.ping();
+
+      for (const [id, pending] of connection.pendingCommands) {
+        pending.reject(new Error('Command timeout'));
+        connection.pendingCommands.delete(id);
+      }
+
       await assert.rejects(
-        connection.ping(),
-        /Ping timeout/
+        pingPromise,
+        /Command timeout/
       );
     });
   });
@@ -294,7 +319,7 @@ describe('UnityConnection', () => {
         });
       });
       
-      connection.handleData(Buffer.from(JSON.stringify(message)));
+      connection.handleData(frameMessage(message));
       
       const received = await messagePromise;
       assert.deepEqual(received, message);
@@ -448,3 +473,15 @@ describe('UnityConnection', () => {
     });
   });
 });
+
+function frameMessage(message) {
+  const payload = Buffer.from(JSON.stringify(message), 'utf8');
+  const header = Buffer.allocUnsafe(4);
+  header.writeInt32BE(payload.length, 0);
+  return Buffer.concat([header, payload]);
+}
+
+function parseFramedMessage(buffer) {
+  const messageLength = buffer.readInt32BE(0);
+  return JSON.parse(buffer.slice(4, 4 + messageLength).toString('utf8'));
+}

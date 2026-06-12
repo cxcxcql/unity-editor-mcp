@@ -14,7 +14,7 @@ This guide will help you set up and run the Unity Editor MCP (Model Context Prot
 
 1. Copy the `unity-editor-mcp` folder into your Unity project's `Packages` directory
 2. Open Unity and wait for it to compile
-3. The package will automatically start a TCP server on port 6400 when Unity loads
+3. The package will automatically start a TCP server on port 6400 when available, or a free local port when another Unity instance already owns 6400
 
 ### Step 2: Node.js Server Setup
 
@@ -38,10 +38,10 @@ This guide will help you set up and run the Unity Editor MCP (Model Context Prot
 ### Unity Configuration
 
 The Unity package uses these default settings:
-- TCP Port: 6400
+- TCP Port: 6400 when available, with automatic fallback to a free local port
 - Host: localhost
 
-Currently, these are hardcoded but will be configurable in future phases.
+Each running Unity Editor writes an internal runtime registry entry to `~/.unity-editor-mcp/instances`, so the Node MCP server can find the right project automatically.
 
 ### Node.js Configuration
 
@@ -68,8 +68,10 @@ export const config = {
 ### Start Order
 
 1. **Start Unity First**: Open your Unity project. The TCP server will start automatically.
-2. **Start Node.js Server**: Run `npm start` in the `mcp-server` directory
+2. **Start Node.js Server**: Run `npm start` in the `mcp-server` directory, or let your MCP client launch it
 3. **Connect Your MCP Client**: Configure your client to connect to the Node.js server
+
+When multiple Unity projects are open, pass `--project <path>` or set `UNITY_PROJECT_PATH` if the MCP client cannot infer the Unity project from its current working directory. You do not set the generated registry file manually.
 
 ### Verifying Connection
 
@@ -91,6 +93,13 @@ In Node.js Terminal:
 [Unity Editor MCP] MCP server started successfully
 [Unity Editor MCP] Connecting to Unity at localhost:6400...
 [Unity Editor MCP] Connected to Unity Editor
+```
+
+You can inspect discovery without starting a full MCP client session:
+
+```bash
+unity-editor-mcp doctor
+unity-editor-mcp doctor --project /path/to/UnityProject
 ```
 
 ## Testing the Connection

@@ -1,2 +1,27 @@
 #!/usr/bin/env node
-import '../src/core/server.js';
+import { main } from '../src/core/server.js';
+import { config } from '../src/core/config.js';
+import { createDiscoveryReport, formatDiscoveryReport } from '../src/core/unityDiscovery.js';
+
+const command = process.argv[2];
+
+if (command === 'doctor' || command === 'list-instances') {
+  const report = await createDiscoveryReport({
+    unityConfig: config.unity,
+    cwd: process.cwd()
+  });
+
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(formatDiscoveryReport(report));
+  }
+
+  process.exit(report.error ? 1 : 0);
+}
+
+main().catch((error) => {
+  console.error('Fatal error:', error);
+  console.error('Stack trace:', error.stack);
+  process.exit(1);
+});

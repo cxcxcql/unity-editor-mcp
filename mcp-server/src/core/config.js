@@ -1,3 +1,10 @@
+import os from 'os';
+import path from 'path';
+
+const cliProjectPath = getCliArgValue(['--project', '--unity-project']);
+const cliPort = getCliArgValue(['--port', '--unity-port']);
+const explicitPortValue = process.env.UNITY_PORT || cliPort;
+
 /**
  * Configuration for Unity Editor MCP Server
  */
@@ -5,11 +12,19 @@ export const config = {
   // Unity connection settings
   unity: {
     host: process.env.UNITY_HOST || 'localhost',
-    port: parseInt(process.env.UNITY_PORT, 10) || 6400,
+    port: parseInt(explicitPortValue, 10) || 6400,
+    hasExplicitPort: Boolean(explicitPortValue),
     reconnectDelay: 1000, // Initial reconnect delay in ms
     maxReconnectDelay: 30000, // Maximum reconnect delay
     reconnectBackoffMultiplier: 2,
     commandTimeout: 30000, // Command timeout in ms
+    discovery: {
+      enabled: process.env.UNITY_MCP_DISCOVERY !== 'false',
+      projectPath: process.env.UNITY_PROJECT_PATH || process.env.UNITY_MCP_PROJECT_PATH || cliProjectPath || '',
+      registryDir: process.env.UNITY_MCP_REGISTRY_DIR || path.join(os.homedir(), '.unity-editor-mcp', 'instances'),
+      staleAfterMs: parseInt(process.env.UNITY_MCP_STALE_AFTER_MS, 10) || 30000,
+      cwd: process.cwd()
+    }
   },
   
   // Server settings
@@ -25,6 +40,17 @@ export const config = {
     prefix: '[Unity Editor MCP]',
   }
 };
+
+function getCliArgValue(names) {
+  for (const name of names) {
+    const index = process.argv.indexOf(name);
+    if (index !== -1 && process.argv[index + 1]) {
+      return process.argv[index + 1];
+    }
+  }
+
+  return '';
+}
 
 /**
  * Logger utility

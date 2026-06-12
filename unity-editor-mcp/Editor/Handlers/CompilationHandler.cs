@@ -173,18 +173,14 @@ namespace UnityEditorMCP.Handlers
             
             try
             {
-                // Unity stores compilation logs in different locations depending on version
+                // Unity stores project-specific compilation artifacts in different locations
+                // depending on version. Do not parse the shared Editor.log here: it can contain
+                // stale compiler output from other open Unity projects.
                 var logPaths = new[]
                 {
                     Path.Combine(Application.dataPath, "..", "Library", "LastBuild.buildreport"),
                     Path.Combine(Application.dataPath, "..", "Library", "CompilationCompleted"),
-                    Path.Combine(Application.dataPath, "..", "Temp", "CompilationLog.txt"),
-                    // Editor log location (Mac)
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), 
-                                "Library/Logs/Unity/Editor.log"),
-                    // Editor log location (Windows)
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
-                                "Unity/Editor/Editor.log")
+                    Path.Combine(Application.dataPath, "..", "Temp", "CompilationLog.txt")
                 };
 
                 foreach (var logPath in logPaths)

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { 
@@ -151,7 +153,7 @@ unityConnection.on('error', (error) => {
 });
 
 // Initialize server
-async function main() {
+export async function main() {
   try {
     // Create transport - no logging before connection
     const transport = new StdioServerTransport();
@@ -247,8 +249,10 @@ export async function createServer(customConfig = config) {
 }
 
 // Start the server
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  console.error('Stack trace:', error.stack);
-  process.exit(1);
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    console.error('Stack trace:', error.stack);
+    process.exit(1);
+  });
+}

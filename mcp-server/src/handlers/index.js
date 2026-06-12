@@ -9,6 +9,7 @@ export { BaseToolHandler } from './base/BaseToolHandler.js';
 export { PingToolHandler } from './system/PingToolHandler.js';
 export { ReadLogsToolHandler } from './system/ReadLogsToolHandler.js';
 export { RefreshAssetsToolHandler } from './system/RefreshAssetsToolHandler.js';
+export { ListUnityInstancesToolHandler } from './system/ListUnityInstancesToolHandler.js';
 
 // GameObject handlers
 export { CreateGameObjectToolHandler } from './gameobject/CreateGameObjectToolHandler.js';
@@ -105,6 +106,7 @@ export { CancelTestsToolHandler } from './test/CancelTestsToolHandler.js';
 import { PingToolHandler } from './system/PingToolHandler.js';
 import { ReadLogsToolHandler } from './system/ReadLogsToolHandler.js';
 import { RefreshAssetsToolHandler } from './system/RefreshAssetsToolHandler.js';
+import { ListUnityInstancesToolHandler } from './system/ListUnityInstancesToolHandler.js';
 import { CreateGameObjectToolHandler } from './gameobject/CreateGameObjectToolHandler.js';
 import { FindGameObjectToolHandler } from './gameobject/FindGameObjectToolHandler.js';
 import { ModifyGameObjectToolHandler } from './gameobject/ModifyGameObjectToolHandler.js';
@@ -175,6 +177,7 @@ const HANDLER_CLASSES = [
   PingToolHandler,
   ReadLogsToolHandler,
   RefreshAssetsToolHandler,
+  ListUnityInstancesToolHandler,
   
   // GameObject handlers
   CreateGameObjectToolHandler,

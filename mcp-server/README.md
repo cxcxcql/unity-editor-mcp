@@ -4,7 +4,7 @@ MCP (Model Context Protocol) server for Unity Editor integration. Enables AI ass
 
 ## Features
 
-- **33 comprehensive tools** for Unity Editor automation
+- **67+ comprehensive tools** for Unity Editor automation
 - **GameObject management** - Create, find, modify, delete GameObjects
 - **Scene management** - Create, load, save, list scenes  
 - **Scene analysis** - Deep inspection and component analysis
@@ -39,7 +39,7 @@ npx unity-editor-mcp
 
 1. Install the Unity package from: `https://github.com/ozankasikci/unity-mcp.git?path=unity-editor-mcp`
 2. Open Unity Package Manager → Add package from git URL
-3. The package will automatically start a TCP server on port 6402
+3. The package will automatically start a TCP server on port 6400 when available, or a free local port when another Unity instance already owns 6400
 
 ## MCP Client Configuration
 
@@ -68,6 +68,25 @@ Add to your `claude_desktop_config.json`:
     }
   }
 }
+```
+
+### Multiple Unity Instances
+
+The Unity package writes live instance metadata automatically to `~/.unity-editor-mcp/instances`. The Node server reads those files to select the correct Unity project. You do not write this registry manually.
+
+Selection order:
+
+1. `UNITY_PORT` or `--port`
+2. `UNITY_PROJECT_PATH`, `UNITY_MCP_PROJECT_PATH`, or `--project`
+3. Unity project inferred from the current working directory
+4. the only live Unity MCP instance
+
+If multiple Unity projects are open and no target can be inferred, the server fails closed and lists candidates instead of connecting to the wrong editor.
+
+```bash
+unity-editor-mcp doctor
+unity-editor-mcp doctor --project /path/to/UnityProject
+unity-editor-mcp doctor --json
 ```
 
 ## Available Tools
@@ -129,7 +148,7 @@ Add to your `claude_desktop_config.json`:
 ### Connection Issues
 1. Ensure Unity Editor is running with the Unity package installed
 2. Check Unity console for connection messages
-3. Verify port 6402 is not blocked by firewall
+3. Run `unity-editor-mcp doctor` to see discovered Unity instances and selected endpoint
 
 ### Installation Issues
 ```bash

@@ -28,6 +28,10 @@ namespace UnityEditorMCP.Core
         private static readonly object queueLock = new object();
         private static CancellationTokenSource cancellationTokenSource;
         private static Task listenerTask;
+        private const double RegistryHeartbeatIntervalSeconds = 5.0;
+        private static double lastRegistryWriteTime;
+        private static int mainThreadId;
+        private static volatile bool registryWritePending;
         
         private static McpStatus _status = McpStatus.NotConfigured;
         public static McpStatus Status
@@ -39,6 +43,7 @@ namespace UnityEditorMCP.Core
                 {
                     _status = value;
                     Debug.Log($"[Unity Editor MCP] Status changed to: {value}");
+                    RequestInstanceRegistryWrite();
                 }
             }
         }
@@ -51,9 +56,11 @@ namespace UnityEditorMCP.Core
         /// </summary>
         static UnityEditorMCP()
         {
+            mainThreadId = Thread.CurrentThread.ManagedThreadId;
             Debug.Log("[Unity Editor MCP] Initializing...");
             EditorApplication.update += ProcessCommandQueue;
             EditorApplication.quitting += Shutdown;
+            AssemblyReloadEvents.beforeAssemblyReload += Shutdown;
             
             // Start the TCP listener
             StartTcpListener();
@@ -72,8 +79,28 @@ namespace UnityEditorMCP.Core
                 }
                 
                 cancellationTokenSource = new CancellationTokenSource();
-                tcpListener = new TcpListener(IPAddress.Loopback, currentPort);
-                tcpListener.Start();
+                TcpListener newListener;
+                int boundPort;
+
+                if (!TryStartTcpListener(currentPort, out newListener, out boundPort, out SocketException primaryException))
+                {
+                    if (currentPort == DEFAULT_PORT && primaryException.SocketErrorCode == SocketError.AddressAlreadyInUse)
+                    {
+                        Debug.LogWarning($"[Unity Editor MCP] Port {DEFAULT_PORT} is already in use. Falling back to an available loopback port.");
+
+                        if (!TryStartTcpListener(0, out newListener, out boundPort, out SocketException fallbackException))
+                        {
+                            throw fallbackException;
+                        }
+                    }
+                    else
+                    {
+                        throw primaryException;
+                    }
+                }
+
+                tcpListener = newListener;
+                currentPort = boundPort;
                 
                 Status = McpStatus.Disconnected;
                 Debug.Log($"[Unity Editor MCP] TCP listener started on port {currentPort}");
@@ -97,6 +124,27 @@ namespace UnityEditorMCP.Core
                 Debug.LogError($"[Unity Editor MCP] Unexpected error starting TCP listener: {ex}");
             }
         }
+
+        private static bool TryStartTcpListener(int requestedPort, out TcpListener listener, out int boundPort, out SocketException socketException)
+        {
+            listener = null;
+            boundPort = requestedPort;
+            socketException = null;
+
+            try
+            {
+                listener = new TcpListener(IPAddress.Loopback, requestedPort);
+                listener.Start();
+                boundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+                return true;
+            }
+            catch (SocketException ex)
+            {
+                listener = null;
+                socketException = ex;
+                return false;
+            }
+        }
         
         /// <summary>
         /// Stops the TCP listener
@@ -115,6 +163,7 @@ namespace UnityEditorMCP.Core
                 
                 Status = McpStatus.Disconnected;
                 Debug.Log("[Unity Editor MCP] TCP listener stopped");
+                UnityInstanceRegistry.Delete();
             }
             catch (Exception ex)
             {
@@ -318,6 +367,12 @@ namespace UnityEditorMCP.Core
                     ProcessCommand(command, client);
                 }
             }
+
+            if (tcpListener != null &&
+                (registryWritePending || EditorApplication.timeSinceStartup - lastRegistryWriteTime >= RegistryHeartbeatIntervalSeconds))
+            {
+                WriteInstanceRegistry();
+            }
         }
         
         /// <summary>
@@ -339,10 +394,18 @@ namespace UnityEditorMCP.Core
                         {
                             message = "pong",
                             echo = command.Parameters?["message"]?.ToString(),
-                            timestamp = System.DateTime.UtcNow.ToString("o")
+                            timestamp = System.DateTime.UtcNow.ToString("o"),
+                            unityVersion = Application.unityVersion,
+                            projectPath = UnityInstanceRegistry.ProjectPath,
+                            port = currentPort,
+                            packageVersion = UnityInstanceRegistry.PackageVersion
                         };
                         // Use new format with command ID
                         response = Response.SuccessResult(command.Id, pongData);
+                        break;
+
+                    case "get_project_info":
+                        response = Response.SuccessResult(command.Id, UnityInstanceRegistry.GetProjectInfo(currentPort, Status));
                         break;
                         
                     case "read_logs":
@@ -799,8 +862,10 @@ namespace UnityEditorMCP.Core
         {
             Debug.Log("[Unity Editor MCP] Shutting down...");
             StopTcpListener();
+            UnityInstanceRegistry.Delete();
             EditorApplication.update -= ProcessCommandQueue;
             EditorApplication.quitting -= Shutdown;
+            AssemblyReloadEvents.beforeAssemblyReload -= Shutdown;
         }
         
         /// <summary>
@@ -826,6 +891,35 @@ namespace UnityEditorMCP.Core
             
             currentPort = newPort;
             Restart();
+        }
+
+        private static void WriteInstanceRegistry()
+        {
+            if (tcpListener == null)
+            {
+                return;
+            }
+
+            registryWritePending = false;
+            UnityInstanceRegistry.Write(currentPort, Status);
+            lastRegistryWriteTime = EditorApplication.timeSinceStartup;
+        }
+
+        private static void RequestInstanceRegistryWrite()
+        {
+            if (tcpListener == null)
+            {
+                return;
+            }
+
+            if (Thread.CurrentThread.ManagedThreadId == mainThreadId)
+            {
+                WriteInstanceRegistry();
+            }
+            else
+            {
+                registryWritePending = true;
+            }
         }
     }
 }
