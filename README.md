@@ -92,7 +92,7 @@ When the Node MCP server starts, it selects the Unity instance in this order:
 
 For Git worktrees, the workspace ID is stored in Git's private worktree metadata via `git rev-parse --git-path unity-editor-mcp/workspace-id`. For non-Git projects it is stored under `Library/UnityEditorMCP/workspace-id`. It is not written to tracked Unity project files.
 
-If the server sees open Unity instances from the same Git repository but not the same worktree, it fails closed with a `WORKTREE_MISMATCH` candidate list instead of connecting silently.
+If the server infers a local Unity project/workspace from the current working directory, it requires an exact project or workspace match and does not use the single-live-instance fallback. If related worktrees from the same Git repository are open but none match the current worktree, it fails closed with a `WORKTREE_MISMATCH` candidate list instead of connecting silently. To restore the old convenience fallback explicitly, set `UNITY_MCP_ALLOW_SINGLE_INSTANCE_FALLBACK=true` or pass `--allow-single-instance-fallback`.
 
 To inspect discovery without starting an MCP session:
 
@@ -101,6 +101,7 @@ unity-editor-mcp doctor
 unity-editor-mcp doctor --project /path/to/UnityProject
 unity-editor-mcp doctor --workspace-id <workspace-id>
 unity-editor-mcp doctor --instance <instance-id>
+unity-editor-mcp doctor --allow-single-instance-fallback
 unity-editor-mcp doctor --json
 ```
 

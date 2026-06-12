@@ -84,13 +84,16 @@ Selection order:
 6. workspace ID inferred from the current working directory
 7. the only live Unity MCP instance
 
-For Git worktrees, the workspace ID is stored under Git's private worktree metadata with `git rev-parse --git-path unity-editor-mcp/workspace-id`. For non-Git projects it is stored under `Library/UnityEditorMCP/workspace-id`. If related worktrees from the same Git repository are open but none match the current worktree, discovery fails closed with `WORKTREE_MISMATCH` and lists candidates instead of connecting to the wrong editor.
+For Git worktrees, the workspace ID is stored under Git's private worktree metadata with `git rev-parse --git-path unity-editor-mcp/workspace-id`. For non-Git projects it is stored under `Library/UnityEditorMCP/workspace-id`. If the server infers a local Unity project/workspace from the current working directory, it requires an exact project or workspace match and does not use the single-live-instance fallback. If related worktrees from the same Git repository are open but none match the current worktree, discovery fails closed with `WORKTREE_MISMATCH` and lists candidates instead of connecting to the wrong editor.
+
+To opt back into the old convenience fallback, set `UNITY_MCP_ALLOW_SINGLE_INSTANCE_FALLBACK=true` or pass `--allow-single-instance-fallback`.
 
 ```bash
 unity-editor-mcp doctor
 unity-editor-mcp doctor --project /path/to/UnityProject
 unity-editor-mcp doctor --workspace-id <workspace-id>
 unity-editor-mcp doctor --instance <instance-id>
+unity-editor-mcp doctor --allow-single-instance-fallback
 unity-editor-mcp doctor --json
 ```
 

@@ -153,7 +153,39 @@ describe('Unity discovery', () => {
     );
   });
 
-  it('keeps single live instance fallback for unrelated projects', () => {
+  it('refuses single live fallback when a local workspace is inferred', () => {
+    const openProject = path.join(tempDir, 'OpenProject');
+    const instances = [
+      {
+        ...createInstance(openProject, 50123),
+        workspaceId: 'open-workspace',
+        git: {
+          commonDir: path.join(tempDir, 'other-repo', '.git')
+        }
+      }
+    ];
+
+    assert.throws(
+      () => selectUnityInstance(instances, {
+        localWorkspace: {
+          projectPath: path.join(tempDir, 'TargetProject'),
+          normalizedProjectPath: normalizeProjectPath(path.join(tempDir, 'TargetProject')),
+          workspaceId: 'target-workspace',
+          git: {
+            commonDir: path.join(tempDir, 'repo', '.git')
+          }
+        }
+      }),
+      (error) => {
+        assert.equal(error.code, 'LOCAL_WORKSPACE_MISMATCH');
+        assert.match(error.message, /No Unity Editor MCP instance matches the current Unity workspace/);
+        assert.match(error.message, /OpenProject/);
+        return true;
+      }
+    );
+  });
+
+  it('allows single live fallback when explicitly enabled for a local workspace', () => {
     const openProject = path.join(tempDir, 'OpenProject');
     const instances = [
       {
@@ -166,6 +198,7 @@ describe('Unity discovery', () => {
     ];
 
     const selection = selectUnityInstance(instances, {
+      allowSingleInstanceFallback: true,
       localWorkspace: {
         projectPath: path.join(tempDir, 'TargetProject'),
         normalizedProjectPath: normalizeProjectPath(path.join(tempDir, 'TargetProject')),
@@ -175,6 +208,18 @@ describe('Unity discovery', () => {
         }
       }
     });
+
+    assert.equal(selection.instance.projectPath, openProject);
+    assert.equal(selection.reason, 'single live Unity instance');
+  });
+
+  it('keeps single live fallback when no local workspace is inferred', () => {
+    const openProject = path.join(tempDir, 'OpenProject');
+    const instances = [
+      createInstance(openProject, 50123)
+    ];
+
+    const selection = selectUnityInstance(instances, { cwd: tempDir });
 
     assert.equal(selection.instance.projectPath, openProject);
     assert.equal(selection.reason, 'single live Unity instance');

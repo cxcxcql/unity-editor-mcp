@@ -4,6 +4,7 @@ import path from 'path';
 const cliProjectPath = getCliArgValue(['--project', '--unity-project']);
 const cliInstanceId = getCliArgValue(['--instance', '--unity-instance']);
 const cliWorkspaceId = getCliArgValue(['--workspace-id', '--unity-workspace-id']);
+const cliAllowSingleInstanceFallback = hasCliFlag(['--allow-single-instance-fallback', '--unity-allow-single-instance-fallback']);
 const cliPort = getCliArgValue(['--port', '--unity-port']);
 const explicitPortValue = process.env.UNITY_PORT || cliPort;
 
@@ -25,6 +26,7 @@ export const config = {
       instanceId: process.env.UNITY_MCP_INSTANCE_ID || cliInstanceId || '',
       projectPath: process.env.UNITY_PROJECT_PATH || process.env.UNITY_MCP_PROJECT_PATH || cliProjectPath || '',
       workspaceId: process.env.UNITY_MCP_WORKSPACE_ID || cliWorkspaceId || '',
+      allowSingleInstanceFallback: parseBoolean(process.env.UNITY_MCP_ALLOW_SINGLE_INSTANCE_FALLBACK) || cliAllowSingleInstanceFallback,
       registryDir: process.env.UNITY_MCP_REGISTRY_DIR || path.join(os.homedir(), '.unity-editor-mcp', 'instances'),
       staleAfterMs: parseInt(process.env.UNITY_MCP_STALE_AFTER_MS, 10) || 30000,
       cwd: process.cwd()
@@ -54,6 +56,14 @@ function getCliArgValue(names) {
   }
 
   return '';
+}
+
+function hasCliFlag(names) {
+  return names.some((name) => process.argv.includes(name));
+}
+
+function parseBoolean(value) {
+  return typeof value === 'string' && ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
 }
 
 /**

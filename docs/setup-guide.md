@@ -102,10 +102,11 @@ unity-editor-mcp doctor
 unity-editor-mcp doctor --project /path/to/UnityProject
 unity-editor-mcp doctor --workspace-id <workspace-id>
 unity-editor-mcp doctor --instance <instance-id>
+unity-editor-mcp doctor --allow-single-instance-fallback
 unity-editor-mcp doctor --json
 ```
 
-When multiple Unity editors are open, discovery first honors explicit selectors (`--instance`, `--project`, then `--workspace-id`), then tries the Unity project and workspace ID inferred from the MCP server's current working directory. Git worktree workspace IDs are stored in Git's private worktree metadata, not in tracked project files. If Unity has a related worktree open but not the current one, discovery fails closed with `WORKTREE_MISMATCH` and shows the candidate instances.
+When multiple Unity editors are open, discovery first honors explicit selectors (`--instance`, `--project`, then `--workspace-id`), then tries the Unity project and workspace ID inferred from the MCP server's current working directory. Git worktree workspace IDs are stored in Git's private worktree metadata, not in tracked project files. If a local Unity workspace is inferred, discovery requires an exact project/workspace match and does not connect to an unrelated single live Unity instance unless `UNITY_MCP_ALLOW_SINGLE_INSTANCE_FALLBACK=true` or `--allow-single-instance-fallback` is used. If Unity has a related worktree open but not the current one, discovery fails closed with `WORKTREE_MISMATCH` and shows the candidate instances.
 
 ## Testing the Connection
 

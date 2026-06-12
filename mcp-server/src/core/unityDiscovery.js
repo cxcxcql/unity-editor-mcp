@@ -161,6 +161,7 @@ export function selectUnityInstance(instances, options = {}) {
   const explicitProjectPath = normalizeProjectPath(options.projectPath);
   const explicitWorkspaceId = normalizeSelector(options.workspaceId);
   const localWorkspace = options.localWorkspace || null;
+  const allowSingleInstanceFallback = options.allowSingleInstanceFallback === true;
   const inferredProjectPath =
     normalizeProjectPath(localWorkspace?.projectPath) ||
     findUnityProjectRoot(options.cwd);
@@ -242,6 +243,10 @@ export function selectUnityInstance(instances, options = {}) {
     throw createWorktreeMismatchError(localWorkspace, mismatchCandidates);
   }
 
+  if ((inferredProjectPath || inferredWorkspaceId) && !allowSingleInstanceFallback) {
+    throw createLocalWorkspaceMismatchError(localWorkspace, inferredProjectPath, inferredWorkspaceId, liveInstances);
+  }
+
   if (liveInstances.length === 1) {
     return {
       instance: liveInstances[0],
@@ -287,6 +292,7 @@ export async function resolveUnityEndpoint(options = {}) {
     instanceId: discoveryConfig.instanceId,
     projectPath: discoveryConfig.projectPath,
     workspaceId: discoveryConfig.workspaceId,
+    allowSingleInstanceFallback: discoveryConfig.allowSingleInstanceFallback === true,
     cwd: discoveryConfig.cwd || options.cwd || process.cwd(),
     localWorkspace
   });
@@ -510,6 +516,19 @@ function createWorktreeMismatchError(localWorkspace, candidates) {
     '\nOpen the matching Unity worktree, pass --project <path>, or pass --instance <id>.'
   );
   error.code = 'WORKTREE_MISMATCH';
+  error.candidates = candidates;
+  return error;
+}
+
+function createLocalWorkspaceMismatchError(localWorkspace, projectPath, workspaceId, candidates) {
+  const error = new Error(
+    'No Unity Editor MCP instance matches the current Unity workspace.\n\n' +
+    `Current project: ${localWorkspace?.projectPath || projectPath || '(unknown)'}\n` +
+    `Current workspace: ${localWorkspace?.workspaceId || workspaceId || '(unknown)'}\n\n` +
+    formatInstanceCandidates(candidates) +
+    '\nOpen the matching Unity project, pass --project <path>, pass --instance <id>, or opt in with --allow-single-instance-fallback.'
+  );
+  error.code = 'LOCAL_WORKSPACE_MISMATCH';
   error.candidates = candidates;
   return error;
 }

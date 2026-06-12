@@ -24,6 +24,10 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
           workspaceId: {
             type: 'string',
             description: 'Optional Unity Editor MCP workspace ID to select exactly'
+          },
+          allowSingleInstanceFallback: {
+            type: 'boolean',
+            description: 'Allow selecting the only live Unity instance even when it does not match the current workspace'
           }
         },
         required: []
@@ -40,7 +44,8 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
         ...config.unity.discovery,
         instanceId: params.instanceId || config.unity.discovery.instanceId,
         projectPath: params.projectPath || config.unity.discovery.projectPath,
-        workspaceId: params.workspaceId || config.unity.discovery.workspaceId
+        workspaceId: params.workspaceId || config.unity.discovery.workspaceId,
+        allowSingleInstanceFallback: params.allowSingleInstanceFallback ?? config.unity.discovery.allowSingleInstanceFallback
       }
     };
 

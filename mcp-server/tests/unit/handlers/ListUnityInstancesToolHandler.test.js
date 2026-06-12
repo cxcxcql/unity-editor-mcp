@@ -40,6 +40,7 @@ describe('ListUnityInstancesToolHandler', () => {
     assert.equal(handler.inputSchema.properties.instanceId.type, 'string');
     assert.equal(handler.inputSchema.properties.projectPath.type, 'string');
     assert.equal(handler.inputSchema.properties.workspaceId.type, 'string');
+    assert.equal(handler.inputSchema.properties.allowSingleInstanceFallback.type, 'boolean');
   });
 
   it('returns workspace and Git metadata for discovered instances', async () => {
