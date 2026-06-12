@@ -102,7 +102,7 @@ unity-editor-mcp doctor --json
 ### System & Core (3 tools)
 - `ping` - Test Unity Editor connection
 - `read_logs` - Read Unity console logs 
-- `refresh_assets` - Trigger asset recompilation
+- `refresh_assets` - Trigger asset recompilation, optionally waiting for completion
 
 ### GameObject Management (5 tools)
 - `create_gameobject` - Create GameObjects with primitives and transforms
@@ -130,6 +130,10 @@ unity-editor-mcp doctor --json
 - `pause_game` - Pause/resume play mode  
 - `stop_game` - Stop play mode
 - `get_editor_state` - Get editor state
+
+### Compilation
+- `get_compilation_state` - Get current compilation state and errors
+- `wait_for_compilation` - Wait for compilation/domain reload to settle and return final messages
 
 ### UI Interactions (5 tools)
 - `find_ui_elements` - Find UI elements by type, tag, or name

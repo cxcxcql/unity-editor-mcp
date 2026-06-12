@@ -107,12 +107,12 @@ unity-editor-mcp doctor --json
 
 ## Available Tools
 
-Unity Editor MCP provides **62 comprehensive tools** across 11 categories for complete Unity Editor automation:
+Unity Editor MCP provides **63 comprehensive tools** across 11 categories for complete Unity Editor automation:
 
 ### System & Core Tools (3 tools)
 - **`ping`** - Test connection to Unity Editor and verify server status
 - **`read_logs`** - Read Unity console logs with filtering by type (Log, Warning, Error, etc.)
-- **`refresh_assets`** - Refresh Unity assets and trigger recompilation
+- **`refresh_assets`** - Refresh Unity assets and optionally wait for compilation to settle
 
 ### GameObject Management (5 tools)
 - **`create_gameobject`** - Create GameObjects with primitives, transforms, tags, and layers
@@ -183,7 +183,7 @@ Unity Editor MCP provides **62 comprehensive tools** across 11 categories for co
 - **`capture_screenshot`** - Take screenshots of Game View or Scene View with custom resolution and encoding
 - **`analyze_screenshot`** - Analyze screenshot content with basic image analysis capabilities
 
-### Editor Control & Automation (8 tools)
+### Editor Control & Automation (9 tools)
 - **`manage_tags`** - Manage Unity project tags (add, remove, list)
 - **`manage_layers`** - Manage Unity project layers (add, remove, list, convert index/name)
 - **`manage_selection`** - Manage Unity Editor selection (get, set, clear, get details)
@@ -192,6 +192,7 @@ Unity Editor MCP provides **62 comprehensive tools** across 11 categories for co
 - **`start_compilation_monitoring`** - Start monitoring Unity compilation with real-time error detection
 - **`stop_compilation_monitoring`** - Stop compilation monitoring and get final status
 - **`get_compilation_state`** - Get current Unity compilation state and errors
+- **`wait_for_compilation`** - Wait for Unity compilation/domain reload to settle and return final messages
 
 
 ## Troubleshooting

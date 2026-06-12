@@ -111,13 +111,14 @@ namespace UnityEditorMCP.Handlers
                 bool isCompiling = EditorApplication.isCompiling;
                 bool isUpdating = EditorApplication.isUpdating;
                 
-                // Read compilation log file for recent errors
-                var compilationLogMessages = ReadCompilationLogFile();
-                
                 // Combine with monitored messages
                 var allMessages = new List<CompilationMessage>();
                 allMessages.AddRange(lastCompilationMessages);
-                allMessages.AddRange(compilationLogMessages);
+                if (includeMessages)
+                {
+                    // Log parsing can be expensive while polling; only do it for detailed reads.
+                    allMessages.AddRange(ReadCompilationLogFile());
+                }
                 
                 // Remove duplicates and sort by timestamp
                 var uniqueMessages = allMessages

@@ -1,4 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
+import { waitForCompilation } from '../../core/compilationWait.js';
 
 /**
  * Handler for the refresh_assets tool
@@ -11,7 +12,32 @@ export class RefreshAssetsToolHandler extends BaseToolHandler {
       'Trigger Unity to refresh assets and check for compilation',
       {
         type: 'object',
-        properties: {},
+        properties: {
+          waitForCompletion: {
+            type: 'boolean',
+            description: 'Wait for Unity compilation and asset updating to settle after refresh'
+          },
+          timeoutMs: {
+            type: 'number',
+            description: 'Maximum time to wait in milliseconds when waitForCompletion is true'
+          },
+          pollIntervalMs: {
+            type: 'number',
+            description: 'Polling interval in milliseconds when waitForCompletion is true'
+          },
+          settleMs: {
+            type: 'number',
+            description: 'Stable non-compiling/non-updating window before completion'
+          },
+          includeMessages: {
+            type: 'boolean',
+            description: 'Fetch detailed compilation messages after completion'
+          },
+          maxMessages: {
+            type: 'number',
+            description: 'Maximum number of detailed messages to return'
+          }
+        },
         required: []
       }
     );
@@ -32,6 +58,9 @@ export class RefreshAssetsToolHandler extends BaseToolHandler {
     
     // Send refresh_assets command
     const result = await this.unityConnection.sendCommand('refresh_assets', {});
+    const compilation = params.waitForCompletion
+      ? await waitForCompilation(this.unityConnection, params)
+      : undefined;
     
     return {
       message: result.message,
@@ -39,7 +68,8 @@ export class RefreshAssetsToolHandler extends BaseToolHandler {
       timestamp: result.timestamp,
       note: result.isCompiling 
         ? 'Unity is compiling. New commands will be available after compilation completes.'
-        : 'Asset refresh complete. Unity is not currently compiling.'
+        : 'Asset refresh complete. Unity is not currently compiling.',
+      ...(compilation && { compilation })
     };
   }
 }

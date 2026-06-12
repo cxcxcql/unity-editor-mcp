@@ -156,7 +156,7 @@ export async function readUnityInstances(options = {}) {
 }
 
 export function selectUnityInstance(instances, options = {}) {
-  const liveInstances = instances.filter((instance) => !instance.stale && instance.alive);
+  const liveInstances = instances.filter((instance) => (!instance.stale && instance.alive) || instance.staleExactMatch);
   const explicitInstanceId = normalizeSelector(options.instanceId);
   const explicitProjectPath = normalizeProjectPath(options.projectPath);
   const explicitWorkspaceId = normalizeSelector(options.workspaceId);
@@ -172,7 +172,7 @@ export function selectUnityInstance(instances, options = {}) {
     if (match) {
       return {
         instance: match,
-        reason: 'explicit instance ID'
+        reason: match.staleExactMatch ? 'stale exact instance ID' : 'explicit instance ID'
       };
     }
 
@@ -190,7 +190,7 @@ export function selectUnityInstance(instances, options = {}) {
     if (matches.length > 0) {
       return {
         instance: matches[0],
-        reason: 'explicit project path'
+        reason: matches[0].staleExactMatch ? 'stale exact project path' : 'explicit project path'
       };
     }
 
@@ -205,7 +205,7 @@ export function selectUnityInstance(instances, options = {}) {
     if (match) {
       return {
         instance: match,
-        reason: 'explicit workspace ID'
+        reason: match.staleExactMatch ? 'stale exact workspace ID' : 'explicit workspace ID'
       };
     }
 
@@ -223,7 +223,7 @@ export function selectUnityInstance(instances, options = {}) {
     if (matches.length > 0) {
       return {
         instance: matches[0],
-        reason: 'current Unity project'
+        reason: matches[0].staleExactMatch ? 'stale current Unity project' : 'current Unity project'
       };
     }
   }
@@ -233,7 +233,7 @@ export function selectUnityInstance(instances, options = {}) {
     if (match) {
       return {
         instance: match,
-        reason: 'current workspace ID'
+        reason: match.staleExactMatch ? 'stale current workspace ID' : 'current workspace ID'
       };
     }
   }
@@ -279,16 +279,31 @@ export async function resolveUnityEndpoint(options = {}) {
     };
   }
 
-  const instances = await readUnityInstances({
-    registryDir: discoveryConfig.registryDir,
-    staleAfterMs: discoveryConfig.staleAfterMs
-  });
+  const portProbe = options.canConnectToPort || canConnectToPort;
+  const cachedEndpoint = await getConnectableCachedEndpoint(options.lastEndpoint, portProbe);
+  if (cachedEndpoint) {
+    return cachedEndpoint;
+  }
 
   const identityStart = discoveryConfig.projectPath || discoveryConfig.cwd || options.cwd || process.cwd();
   const localWorkspace = options.localWorkspace === undefined
     ? await getLocalWorkspaceIdentity(identityStart)
     : options.localWorkspace;
-  const selection = selectUnityInstance(instances, {
+
+  const instances = await readUnityInstances({
+    registryDir: discoveryConfig.registryDir,
+    staleAfterMs: discoveryConfig.staleAfterMs,
+    includeStale: true
+  });
+  const selectableInstances = await promoteConnectableExactMatches(instances, {
+    instanceId: discoveryConfig.instanceId,
+    projectPath: discoveryConfig.projectPath,
+    workspaceId: discoveryConfig.workspaceId,
+    localWorkspace,
+    fallbackHost: host,
+    canConnect: portProbe
+  });
+  const selection = selectUnityInstance(selectableInstances, {
     instanceId: discoveryConfig.instanceId,
     projectPath: discoveryConfig.projectPath,
     workspaceId: discoveryConfig.workspaceId,
@@ -435,6 +450,72 @@ export function formatInstanceCandidates(instances) {
       `branch ${instance.git?.branch || 'unknown'})`
     )
   ].join('\n');
+}
+
+async function getConnectableCachedEndpoint(endpoint, canConnect) {
+  if (!endpoint?.instance?.pid || !endpoint.port || !isProcessAlive(endpoint.instance.pid)) {
+    return null;
+  }
+
+  const host = endpoint.host || endpoint.instance.host || '127.0.0.1';
+  if (!(await canConnect(host, endpoint.port))) {
+    return null;
+  }
+
+  return {
+    ...endpoint,
+    host,
+    source: 'cached-endpoint'
+  };
+}
+
+async function promoteConnectableExactMatches(instances, options) {
+  const promoted = [];
+  for (const instance of instances) {
+    if (!instance.stale || !instance.alive || !isExactSelectorMatch(instance, options)) {
+      promoted.push(instance);
+      continue;
+    }
+
+    const host = instance.host || options.fallbackHost || '127.0.0.1';
+    const port = instance.port;
+    const connectable = Number.isInteger(port) && await options.canConnect(host, port);
+    promoted.push(connectable
+      ? {
+        ...instance,
+        staleExactMatch: true,
+        originalStale: true
+      }
+      : instance
+    );
+  }
+
+  return promoted;
+}
+
+function isExactSelectorMatch(instance, options) {
+  const instanceId = normalizeSelector(options.instanceId);
+  if (instanceId && instance.instanceId === instanceId) {
+    return true;
+  }
+
+  const projectPath = normalizeProjectPath(options.projectPath);
+  if (projectPath && pathsEqual(instance.normalizedProjectPath, projectPath)) {
+    return true;
+  }
+
+  const workspaceId = normalizeSelector(options.workspaceId);
+  if (workspaceId && normalizeSelector(instance.workspaceId) === workspaceId) {
+    return true;
+  }
+
+  const localProjectPath = normalizeProjectPath(options.localWorkspace?.projectPath);
+  if (localProjectPath && pathsEqual(instance.normalizedProjectPath, localProjectPath)) {
+    return true;
+  }
+
+  const localWorkspaceId = normalizeSelector(options.localWorkspace?.workspaceId);
+  return Boolean(localWorkspaceId && normalizeSelector(instance.workspaceId) === localWorkspaceId);
 }
 
 async function runGit(projectPath, args) {

@@ -141,6 +141,7 @@ export class UnityConnection extends EventEmitter {
   async resolveEndpoint() {
     this.endpoint = await resolveUnityEndpoint({
       unityConfig: this.config.unity,
+      lastEndpoint: this.endpoint,
       cwd: this.config.unity.discovery?.cwd || process.cwd()
     });
     return this.endpoint;

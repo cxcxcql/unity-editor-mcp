@@ -134,6 +134,7 @@ describe('Server', () => {
       // Check for some key handlers
       assert.ok(handlers.has('ping'));
       assert.ok(handlers.has('list_unity_instances'));
+      assert.ok(handlers.has('wait_for_compilation'));
       assert.ok(handlers.has('create_gameobject'));
       assert.ok(handlers.has('get_hierarchy'));
       assert.ok(handlers.has('analyze_scene_contents'));

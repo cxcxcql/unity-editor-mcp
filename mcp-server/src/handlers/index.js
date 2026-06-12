@@ -88,6 +88,7 @@ export { GetComponentTypesToolHandler } from './component/GetComponentTypesToolH
 export { StartCompilationMonitoringToolHandler } from './compilation/StartCompilationMonitoringToolHandler.js';
 export { StopCompilationMonitoringToolHandler } from './compilation/StopCompilationMonitoringToolHandler.js';
 export { GetCompilationStateToolHandler } from './compilation/GetCompilationStateToolHandler.js';
+export { WaitForCompilationToolHandler } from './compilation/WaitForCompilationToolHandler.js';
 
 // Editor control handlers
 export { TagManagementToolHandler } from './editor/TagManagementToolHandler.js';
@@ -161,6 +162,7 @@ import { GetComponentTypesToolHandler } from './component/GetComponentTypesToolH
 import { StartCompilationMonitoringToolHandler } from './compilation/StartCompilationMonitoringToolHandler.js';
 import { StopCompilationMonitoringToolHandler } from './compilation/StopCompilationMonitoringToolHandler.js';
 import { GetCompilationStateToolHandler } from './compilation/GetCompilationStateToolHandler.js';
+import { WaitForCompilationToolHandler } from './compilation/WaitForCompilationToolHandler.js';
 import { TagManagementToolHandler } from './editor/TagManagementToolHandler.js';
 import { LayerManagementToolHandler } from './editor/LayerManagementToolHandler.js';
 import { SelectionToolHandler } from './editor/SelectionToolHandler.js';
@@ -256,6 +258,7 @@ const HANDLER_CLASSES = [
   StartCompilationMonitoringToolHandler,
   StopCompilationMonitoringToolHandler,
   GetCompilationStateToolHandler,
+  WaitForCompilationToolHandler,
   
   // Editor control handlers
   TagManagementToolHandler,

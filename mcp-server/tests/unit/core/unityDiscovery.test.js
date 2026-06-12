@@ -294,6 +294,63 @@ describe('Unity discovery', () => {
     assert.equal(endpoint.source, 'default-port');
   });
 
+  it('prefers the last discovered endpoint when it is still connectable', async () => {
+    const endpoint = await resolveUnityEndpoint({
+      unityConfig: {
+        host: 'localhost',
+        port: 6400,
+        hasExplicitPort: false,
+        discovery: { registryDir, enabled: true }
+      },
+      lastEndpoint: {
+        host: '127.0.0.1',
+        port: 50123,
+        source: 'discovery',
+        reason: 'current Unity project',
+        instance: {
+          pid: process.pid,
+          host: '127.0.0.1',
+          port: 50123
+        }
+      },
+      canConnectToPort: async (host, port) => host === '127.0.0.1' && port === 50123,
+      cwd: tempDir
+    });
+
+    assert.equal(endpoint.port, 50123);
+    assert.equal(endpoint.source, 'cached-endpoint');
+  });
+
+  it('uses a stale exact project match during reload when its port is connectable', async () => {
+    const projectPath = path.join(tempDir, 'ReloadingProject');
+    await writeInstance('reloading.json', {
+      instanceId: 'unity-reloading',
+      projectPath,
+      pid: process.pid,
+      port: 50123,
+      lastSeen: new Date(Date.now() - 120000).toISOString()
+    });
+
+    const endpoint = await resolveUnityEndpoint({
+      unityConfig: {
+        host: 'localhost',
+        port: 6400,
+        hasExplicitPort: false,
+        discovery: {
+          registryDir,
+          enabled: true,
+          projectPath
+        }
+      },
+      canConnectToPort: async (host, port) => host === '127.0.0.1' && port === 50123,
+      cwd: tempDir
+    });
+
+    assert.equal(endpoint.port, 50123);
+    assert.equal(endpoint.reason, 'stale exact project path');
+    assert.equal(endpoint.instance.stale, true);
+  });
+
   it('uses explicit port without discovery', async () => {
     const endpoint = await resolveUnityEndpoint({
       unityConfig: {
