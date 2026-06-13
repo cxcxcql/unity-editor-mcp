@@ -80,6 +80,8 @@ export class UnityConnection extends EventEmitter {
           // Destroy the socket to clean up properly
           this.socket.destroy();
           this.isDisconnecting = false;
+          // Re-discover on the next reconnect rather than reusing a stale endpoint.
+          this.endpoint = null;
           reject(error);
         }
       });
@@ -126,7 +128,19 @@ export class UnityConnection extends EventEmitter {
           // Remove event listeners before destroying to prevent callbacks after timeout
           this.socket.removeAllListeners();
           this.socket.destroy();
+          this.socket = null;
+          // Drop the cached endpoint so the re-armed reconnect re-discovers the
+          // live listener (the port may have changed after a Unity reload) instead
+          // of latching onto this stale one.
+          this.endpoint = null;
           reject(new Error('Connection timeout'));
+          // removeAllListeners() above strips the 'close' handler that normally
+          // re-arms reconnection. A connect that *hangs* (Unity mid-domain-reload
+          // or slow play-mode boot) would otherwise silently kill the reconnect
+          // chain, leaving the bridge stuck until manually restarted. Re-arm it.
+          if (!this.isDisconnecting && process.env.DISABLE_AUTO_RECONNECT !== 'true') {
+            this.scheduleReconnect();
+          }
         }
       }, this.config.unity.commandTimeout);
     });
