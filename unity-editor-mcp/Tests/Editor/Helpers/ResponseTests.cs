@@ -3,6 +3,7 @@ using UnityEditorMCP.Helpers;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace UnityEditorMCP.Tests.Helpers
 {
@@ -105,7 +106,7 @@ namespace UnityEditorMCP.Tests.Helpers
             // Act
             var result = Response.Success(null);
             var json = JObject.Parse(result);
-            
+
             // Assert
             Assert.AreEqual("success", json["status"].Value<string>());
             Assert.IsFalse(json.ContainsKey("data"));
