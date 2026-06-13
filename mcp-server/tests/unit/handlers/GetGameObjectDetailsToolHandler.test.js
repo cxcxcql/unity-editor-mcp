@@ -9,14 +9,11 @@ describe('GetGameObjectDetailsToolHandler', () => {
 
     beforeEach(() => {
         sendCommandSpy = mock.fn(() => Promise.resolve({
-            status: 'success',
-            result: {
-                name: 'TestObject',
-                path: '/TestObject',
-                isActive: true,
-                components: [],
-                summary: 'GameObject "TestObject" at /TestObject'
-            }
+            name: 'TestObject',
+            path: '/TestObject',
+            isActive: true,
+            components: [],
+            summary: 'GameObject "TestObject" at /TestObject'
         }));
 
         mockUnityConnection = {
@@ -40,7 +37,8 @@ describe('GetGameObjectDetailsToolHandler', () => {
         const args = { gameObjectName: 'TestObject' };
         const result = await handler.execute(args);
 
-        assert.equal(result.isError, false);
+        assert.equal(result.name, 'TestObject');
+        assert.equal(result.path, '/TestObject');
         assert.equal(sendCommandSpy.mock.calls.length, 1);
         assert.equal(sendCommandSpy.mock.calls[0].arguments[0], 'get_gameobject_details');
         assert.deepEqual(sendCommandSpy.mock.calls[0].arguments[1], args);

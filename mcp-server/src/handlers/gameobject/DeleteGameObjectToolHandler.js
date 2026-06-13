@@ -19,6 +19,7 @@ export class DeleteGameObjectToolHandler extends BaseToolHandler {
           paths: {
             type: 'array',
             description: 'Array of paths to multiple GameObjects to delete',
+            minItems: 1,
             items: {
               type: 'string'
             }
@@ -28,7 +29,17 @@ export class DeleteGameObjectToolHandler extends BaseToolHandler {
             description: 'Whether to delete children (default: true)'
           }
         },
-        required: []
+        required: [],
+        oneOf: [
+          {
+            required: ['path'],
+            not: { required: ['paths'] }
+          },
+          {
+            required: ['paths'],
+            not: { required: ['path'] }
+          }
+        ]
       }
     );
     

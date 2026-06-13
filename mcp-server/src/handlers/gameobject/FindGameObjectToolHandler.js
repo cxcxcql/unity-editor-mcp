@@ -45,6 +45,18 @@ export class FindGameObjectToolHandler extends BaseToolHandler {
    */
   validate(params) {
     super.validate(params);
+
+    if (params.name !== undefined && typeof params.name !== 'string') {
+      throw new Error('name must be a string');
+    }
+
+    if (params.tag !== undefined && typeof params.tag !== 'string') {
+      throw new Error('tag must be a string');
+    }
+
+    if (params.exactMatch !== undefined && typeof params.exactMatch !== 'boolean') {
+      throw new Error('exactMatch must be a boolean');
+    }
     
     // At least one search criteria must be provided
     if (!params.name && !params.tag && params.layer === undefined) {
@@ -53,9 +65,12 @@ export class FindGameObjectToolHandler extends BaseToolHandler {
     
     // Validate layer
     if (params.layer !== undefined) {
-      const layer = Number(params.layer);
-      if (isNaN(layer) || layer < 0 || layer > 31) {
-        throw new Error('layer must be a number between 0 and 31');
+      if (typeof params.layer !== 'number' || !Number.isFinite(params.layer)) {
+        throw new Error('layer must be a number');
+      }
+
+      if (params.layer < 0 || params.layer > 31) {
+        throw new Error('layer must be between 0 and 31');
       }
     }
   }

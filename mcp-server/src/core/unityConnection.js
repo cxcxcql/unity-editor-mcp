@@ -308,7 +308,12 @@ export class UnityConnection extends EventEmitter {
               pending.resolve(result);
             } else if (response.status === 'error' || response.success === false) {
               logger.error(`[Unity] Command ${response.id} failed:`, response.error);
-              pending.reject(new Error(response.error || 'Command failed'));
+              const error = new Error(response.error || 'Command failed');
+              error.code = response.code || response.errorCode || 'UNITY_ERROR';
+              if (response.details !== undefined) {
+                error.details = response.details;
+              }
+              pending.reject(error);
             } else {
               // Unknown format
               logger.warn(`[Unity] Command ${response.id} has unknown response format`);
@@ -355,7 +360,8 @@ export class UnityConnection extends EventEmitter {
     const command = {
       id,
       type,
-      params
+      params,
+      ...(this.endpoint?.authToken && { authToken: this.endpoint.authToken })
     };
 
     return new Promise((resolve, reject) => {
@@ -390,7 +396,7 @@ export class UnityConnection extends EventEmitter {
       
       const framedMessage = Buffer.concat([lengthBuffer, messageBuffer]);
       
-      logger.info(`[Unity] Sending framed command ${id}: ${json}`);
+      logger.info(`[Unity] Sending framed command ${id}: ${JSON.stringify(redactCommand(command))}`);
       
       this.socket.write(framedMessage, (error) => {
         if (error) {
@@ -425,7 +431,31 @@ export class UnityConnection extends EventEmitter {
   getConnectionInfo() {
     return {
       connected: this.connected,
-      endpoint: this.endpoint
+      endpoint: redactEndpoint(this.endpoint)
     };
   }
+}
+
+function redactCommand(command) {
+  return {
+    ...command,
+    ...(command.authToken && { authToken: '[redacted]' })
+  };
+}
+
+function redactEndpoint(endpoint) {
+  if (!endpoint || typeof endpoint !== 'object') {
+    return endpoint;
+  }
+
+  return {
+    ...endpoint,
+    ...(endpoint.authToken && { authToken: '[redacted]' }),
+    ...(endpoint.instance && {
+      instance: {
+        ...endpoint.instance,
+        ...(endpoint.instance.authToken && { authToken: '[redacted]' })
+      }
+    })
+  };
 }

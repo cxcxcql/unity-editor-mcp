@@ -49,11 +49,23 @@ export class RunTestsToolHandler extends BaseToolHandler {
    * @param {object} params - Input parameters
    * @returns {Promise<object>} Test execution status
    */
-  async execute(params) {
+  async execute(params, context) {
     // Ensure connected
     if (!this.unityConnection.isConnected()) {
       await this.unityConnection.connect();
     }
+
+    if (context?.signal?.aborted) {
+      const error = new Error('Request cancelled');
+      error.code = 'REQUEST_CANCELLED';
+      throw error;
+    }
+
+    await context?.sendProgress?.({
+      progress: 0,
+      total: 1,
+      message: 'Starting Unity test run'
+    });
     
     // Send run tests command
     const result = await this.unityConnection.sendCommand('run_tests', {
@@ -62,6 +74,18 @@ export class RunTestsToolHandler extends BaseToolHandler {
       runAll: params.runAll,
       includeCategories: params.includeCategories,
       excludeCategories: params.excludeCategories
+    });
+
+    if (context?.signal?.aborted) {
+      const error = new Error('Request cancelled');
+      error.code = 'REQUEST_CANCELLED';
+      throw error;
+    }
+
+    await context?.sendProgress?.({
+      progress: 1,
+      total: 1,
+      message: 'Unity test run request complete'
     });
     
     return result;

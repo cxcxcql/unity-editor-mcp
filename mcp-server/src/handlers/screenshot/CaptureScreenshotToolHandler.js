@@ -95,11 +95,23 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
    * @param {Object} params - The validated input parameters
    * @returns {Promise<Object>} The screenshot capture result
    */
-  async execute(params) {
+  async execute(params, context) {
     // Ensure connection to Unity
     if (!this.unityConnection.isConnected()) {
       await this.unityConnection.connect();
     }
+
+    if (context?.signal?.aborted) {
+      const error = new Error('Request cancelled');
+      error.code = 'REQUEST_CANCELLED';
+      throw error;
+    }
+
+    await context?.sendProgress?.({
+      progress: 0,
+      total: 1,
+      message: 'Requesting Unity screenshot'
+    });
 
     // Send capture command to Unity
     const response = await this.unityConnection.sendCommand('capture_screenshot', params);
@@ -107,6 +119,12 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
     // Handle Unity response
     if (response.error) {
       throw new Error(response.error);
+    }
+
+    if (context?.signal?.aborted) {
+      const error = new Error('Request cancelled');
+      error.code = 'REQUEST_CANCELLED';
+      throw error;
     }
 
     // Build result object
@@ -135,6 +153,12 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
     if (response.base64Data) {
       result.base64Data = response.base64Data;
     }
+
+    await context?.sendProgress?.({
+      progress: 1,
+      total: 1,
+      message: 'Unity screenshot capture complete'
+    });
 
     return result;
   }

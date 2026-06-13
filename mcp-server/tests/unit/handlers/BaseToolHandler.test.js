@@ -117,8 +117,18 @@ describe('BaseToolHandler', () => {
     });
 
     it('should handle request with no parameters when none required', async () => {
-      const noRequiredHandler = new TestToolHandler();
-      noRequiredHandler.inputSchema.required = undefined;
+      class NoRequiredHandler extends BaseToolHandler {
+        constructor() {
+          super('no_required', 'No required params', {
+            type: 'object',
+            properties: {}
+          });
+        }
+        async execute() {
+          return { result: 'success' };
+        }
+      }
+      const noRequiredHandler = new NoRequiredHandler();
       
       const result = await noRequiredHandler.handle();
       assert.equal(result.status, 'success');

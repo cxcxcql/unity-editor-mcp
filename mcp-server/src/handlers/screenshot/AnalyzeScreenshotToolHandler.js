@@ -32,7 +32,17 @@ export class AnalyzeScreenshotToolHandler extends BaseToolHandler {
             description: 'Optional prompt for AI-based analysis (e.g., "Find all buttons in the UI")'
           }
         },
-        required: []
+        required: [],
+        oneOf: [
+          {
+            required: ['imagePath'],
+            not: { required: ['base64Data'] }
+          },
+          {
+            required: ['base64Data'],
+            not: { required: ['imagePath'] }
+          }
+        ]
       }
     );
     

@@ -33,8 +33,11 @@ describe('FindGameObjectToolHandler', () => {
       assert.doesNotThrow(() => handler.validate({"name":"TestObject"}));
     });
 
-    it('should pass with empty parameters', () => {
-      assert.doesNotThrow(() => handler.validate({}));
+    it('should fail with empty parameters', () => {
+      assert.throws(
+        () => handler.validate({}),
+        /At least one search criteria/
+      );
     });
 
     it('should validate layer bounds', () => {
@@ -63,8 +66,8 @@ describe('FindGameObjectToolHandler', () => {
     });
 
     it('should accept boolean exactMatch values', () => {
-      assert.doesNotThrow(() => handler.validate({"exactMatch": true}));
-      assert.doesNotThrow(() => handler.validate({"exactMatch": false}));
+      assert.doesNotThrow(() => handler.validate({"name":"Player", "exactMatch": true}));
+      assert.doesNotThrow(() => handler.validate({"name":"Player", "exactMatch": false}));
     });
 
     it('should validate parameter types', () => {

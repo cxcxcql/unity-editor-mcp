@@ -37,7 +37,7 @@ export class WaitForCompilationToolHandler extends BaseToolHandler {
     this.unityConnection = unityConnection;
   }
 
-  async execute(params) {
-    return waitForCompilation(this.unityConnection, params);
+  async execute(params, context) {
+    return waitForCompilation(this.unityConnection, params, context);
   }
 }

@@ -51,19 +51,17 @@ describe('FindByComponentToolHandler', () => {
       
       assert.equal(mockConnection.sendCommand.mock.calls.length, 1);
       assert.ok(result);
-      assert.ok(result.content);
-      assert.equal(result.isError, false);
-      assert.ok(result.content[0].text.includes("Found 2 objects"));
+      assert.equal(result.count, 2);
+      assert.ok(result.summary.includes("Found 2 objects"));
     });
 
     it('should return error if not connected', async () => {
       mockConnection.isConnected.mock.mockImplementation(() => false);
       
-      const result = await handler.execute({"componentType":"Light"});
-      
-      assert.ok(result);
-      assert.equal(result.isError, true);
-      assert.ok(result.content[0].text.includes('Unity connection not available'));
+      await assert.rejects(
+        async () => await handler.execute({"componentType":"Light"}),
+        /Unity connection not available/
+      );
     });
   });
 
@@ -73,8 +71,8 @@ describe('FindByComponentToolHandler', () => {
       
       assert.equal(result.status, 'success');
       assert.ok(result.result);
-      assert.ok(result.result.content);
-      assert.equal(result.result.isError, false);
+      assert.equal(result.result.count, 2);
+      assert.ok(result.result.summary.includes("Found 2 objects"));
     });
 
     it('should return error for validation failure', async () => {

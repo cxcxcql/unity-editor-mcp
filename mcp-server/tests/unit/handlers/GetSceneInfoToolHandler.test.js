@@ -44,18 +44,17 @@ describe('GetSceneInfoToolHandler', () => {
       
       assert.equal(mockConnection.sendCommand.mock.calls.length, 1);
       assert.ok(result);
-      assert.ok(result.content);
-      assert.equal(result.isError, false);
+      assert.equal(result.name, "TestScene");
+      assert.ok(result.summary.includes("TestScene"));
     });
 
     it('should return error if not connected', async () => {
       mockConnection.isConnected.mock.mockImplementation(() => false);
       
-      const result = await handler.execute({"sceneName":"TestScene"});
-      
-      assert.ok(result);
-      assert.equal(result.isError, true);
-      assert.ok(result.content[0].text.includes('Unity connection not available'));
+      await assert.rejects(
+        async () => await handler.execute({"sceneName":"TestScene"}),
+        /Unity connection not available/
+      );
     });
   });
 
@@ -65,8 +64,7 @@ describe('GetSceneInfoToolHandler', () => {
       
       assert.equal(result.status, 'success');
       assert.ok(result.result);
-      assert.ok(result.result.content);
-      assert.equal(result.result.isError, false);
+      assert.equal(result.result.name, "TestScene");
     });
 
   });

@@ -48,9 +48,8 @@ describe('AnalyzeSceneContentsToolHandler', () => {
       
       assert.equal(mockConnection.sendCommand.mock.calls.length, 1);
       assert.ok(result);
-      assert.ok(result.content);
-      assert.equal(result.isError, false);
-      assert.ok(result.content[0].text.includes("Scene contains 10 objects"));
+      assert.equal(result.totalObjects, 10);
+      assert.ok(result.summary.includes("Scene contains 10 objects"));
     });
 
     it('should throw error if not connected', async () => {
@@ -69,8 +68,8 @@ describe('AnalyzeSceneContentsToolHandler', () => {
       
       assert.equal(result.status, 'success');
       assert.ok(result.result);
-      assert.ok(result.result.content);
-      assert.equal(result.result.isError, false);
+      assert.equal(result.result.totalObjects, 10);
+      assert.ok(result.result.summary.includes("Scene contains 10 objects"));
     });
 
   });

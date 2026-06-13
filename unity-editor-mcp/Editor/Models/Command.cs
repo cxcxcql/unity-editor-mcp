@@ -27,6 +27,12 @@ namespace UnityEditorMCP.Models
         /// </summary>
         [JsonProperty("params")]
         public JObject Parameters { get; set; }
+
+        /// <summary>
+        /// Per-editor-instance token used to authenticate local bridge commands.
+        /// </summary>
+        [JsonProperty("authToken")]
+        public string AuthToken { get; set; }
         
         /// <summary>
         /// Timestamp when the command was received

@@ -1,6 +1,6 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
 import { config } from '../../core/config.js';
-import { createDiscoveryReport } from '../../core/unityDiscovery.js';
+import { createDiscoveryReport, redactDiscoveryReport } from '../../core/unityDiscovery.js';
 
 /**
  * Handler for listing Unity Editor MCP instances discovered on this machine.
@@ -49,10 +49,10 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
       }
     };
 
-    const report = await createDiscoveryReport({
+    const report = redactDiscoveryReport(await createDiscoveryReport({
       unityConfig,
       cwd: process.cwd()
-    });
+    }));
 
     return {
       registryDir: report.registryDir,

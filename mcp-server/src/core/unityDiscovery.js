@@ -271,11 +271,26 @@ export async function resolveUnityEndpoint(options = {}) {
   const host = unityConfig.host || 'localhost';
   const port = unityConfig.port || 6400;
 
-  if (unityConfig.hasExplicitPort || discoveryConfig.enabled === false) {
+  if (unityConfig.hasExplicitPort) {
+    const registryMatch = discoveryConfig.enabled === false
+      ? null
+      : await findRegistryEndpointByPort(host, port, {
+        registryDir: discoveryConfig.registryDir,
+        staleAfterMs: discoveryConfig.staleAfterMs
+      });
     return {
       host,
       port,
-      source: unityConfig.hasExplicitPort ? 'explicit-port' : 'discovery-disabled'
+      source: 'explicit-port',
+      ...(registryMatch && { instance: registryMatch, authToken: registryMatch.authToken })
+    };
+  }
+
+  if (discoveryConfig.enabled === false) {
+    return {
+      host,
+      port,
+      source: 'discovery-disabled'
     };
   }
 
@@ -326,7 +341,8 @@ export async function resolveUnityEndpoint(options = {}) {
     source: 'discovery',
     reason: selection.reason,
     instance: selection.instance,
-    projectPath: selection.instance.projectPath
+    projectPath: selection.instance.projectPath,
+    authToken: selection.instance.authToken
   };
 }
 
@@ -370,19 +386,20 @@ export async function createDiscoveryReport(options = {}) {
 }
 
 export function formatDiscoveryReport(report) {
+  const safeReport = redactDiscoveryReport(report);
   const lines = [
     'Unity Editor MCP discovery report',
-    `Registry: ${report.registryDir}`,
-    `Target project: ${report.targetProjectPath || '(not inferred)'}`,
-    `Target workspace: ${report.targetWorkspaceId || '(not inferred)'}`,
+    `Registry: ${safeReport.registryDir}`,
+    `Target project: ${safeReport.targetProjectPath || '(not inferred)'}`,
+    `Target workspace: ${safeReport.targetWorkspaceId || '(not inferred)'}`,
     ''
   ];
 
-  if (report.instances.length === 0) {
+  if (safeReport.instances.length === 0) {
     lines.push('No Unity Editor MCP instances were found.');
   } else {
     lines.push('Instances:');
-    for (const instance of report.instances) {
+    for (const instance of safeReport.instances) {
       lines.push(
         `- ${instance.projectPath || '(unknown project)'} ` +
         `(pid ${instance.pid}, ${instance.host || '127.0.0.1'}:${instance.port}, ` +
@@ -394,16 +411,20 @@ export function formatDiscoveryReport(report) {
 
   lines.push('');
 
-  if (report.endpoint) {
-    lines.push(`Selected endpoint: ${report.endpoint.host}:${report.endpoint.port} (${report.endpoint.source})`);
-    if (report.endpoint.projectPath) {
-      lines.push(`Selected project: ${report.endpoint.projectPath}`);
+  if (safeReport.endpoint) {
+    lines.push(`Selected endpoint: ${safeReport.endpoint.host}:${safeReport.endpoint.port} (${safeReport.endpoint.source})`);
+    if (safeReport.endpoint.projectPath) {
+      lines.push(`Selected project: ${safeReport.endpoint.projectPath}`);
     }
   } else {
-    lines.push(`Selection error: ${report.errorCode ? `[${report.errorCode}] ` : ''}${report.error}`);
+    lines.push(`Selection error: ${safeReport.errorCode ? `[${safeReport.errorCode}] ` : ''}${safeReport.error}`);
   }
 
   return lines.join('\n');
+}
+
+export function redactDiscoveryReport(report) {
+  return redactAuthTokens(report);
 }
 
 export function canConnectToPort(host, port, timeoutMs = 1000) {
@@ -467,6 +488,40 @@ async function getConnectableCachedEndpoint(endpoint, canConnect) {
     host,
     source: 'cached-endpoint'
   };
+}
+
+async function findRegistryEndpointByPort(host, port, options = {}) {
+  const instances = await readUnityInstances({
+    registryDir: options.registryDir,
+    staleAfterMs: options.staleAfterMs,
+    includeStale: false
+  });
+
+  return instances.find((instance) =>
+    Number(instance.port) === Number(port) &&
+    normalizeHost(instance.host || '127.0.0.1') === normalizeHost(host || '127.0.0.1')
+  ) || null;
+}
+
+function redactAuthTokens(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactAuthTokens(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const copy = {};
+  for (const [key, child] of Object.entries(value)) {
+    copy[key] = key === 'authToken' ? '[redacted]' : redactAuthTokens(child);
+  }
+  return copy;
+}
+
+function normalizeHost(host) {
+  const value = String(host || '').toLowerCase();
+  return value === 'localhost' ? '127.0.0.1' : value;
 }
 
 async function promoteConnectableExactMatches(instances, options) {

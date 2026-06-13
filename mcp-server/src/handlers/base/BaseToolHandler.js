@@ -1,12 +1,18 @@
+import { compileToolValidator, normalizeInputSchema, SchemaValidationError } from '../../core/schemaValidation.js';
+import { GENERIC_OBJECT_OUTPUT_SCHEMA, inferToolAnnotations } from '../../core/toolAnnotations.js';
+
 /**
- * Base class for all tool handlers
- * Provides common functionality for validation, execution, and error handling
+ * Base class for all tool handlers.
+ * Each subclass owns its MCP metadata and Unity execution behavior.
  */
 export class BaseToolHandler {
-  constructor(name, description, inputSchema = {}) {
+  constructor(name, description, inputSchema = {}, options = {}) {
     this.name = name;
     this.description = description;
-    this.inputSchema = inputSchema;
+    this.inputSchema = normalizeInputSchema(inputSchema);
+    this.outputSchema = options.outputSchema || GENERIC_OBJECT_OUTPUT_SCHEMA;
+    this.annotations = options.annotations || inferToolAnnotations(name);
+    this.validateInputSchema = compileToolValidator(name, this.inputSchema);
   }
 
   /**
@@ -30,50 +36,40 @@ export class BaseToolHandler {
    * Executes the tool logic
    * Must be implemented by subclasses
    * @param {object} params - Validated input parameters
+   * @param {object} context - MCP request context
    * @returns {Promise<object>} Tool result
    */
-  async execute(params) {
+  async execute(params, context) {
     throw new Error('execute() must be implemented by subclass');
   }
 
   /**
    * Main handler method that orchestrates validation and execution
    * @param {object} params - Input parameters
+   * @param {object} context - MCP request context
    * @returns {Promise<object>} Standardized response
    */
-  async handle(params = {}) {
-    console.error(`[Handler ${this.name}] Starting handle() with params:`, params);
-    
+  async handle(params = {}, context = {}) {
+    const safeParams = params ?? {};
     try {
-      // Validate parameters
-      console.error(`[Handler ${this.name}] Validating parameters...`);
-      this.validate(params);
-      console.error(`[Handler ${this.name}] Validation passed`);
-      
-      // Execute tool logic
-      console.error(`[Handler ${this.name}] Executing tool logic...`);
-      const startTime = Date.now();
-      const result = await this.execute(params);
-      const duration = Date.now() - startTime;
-      console.error(`[Handler ${this.name}] Execution completed in ${duration}ms`);
-      
-      // Return success response in new format
+      this.validate(safeParams);
+      this.validateInputSchema(safeParams);
+
+      const result = await this.execute(safeParams, context);
+
       return {
         status: 'success',
-        result
+        result: this.normalizeExecutionResult(result)
       };
     } catch (error) {
-      console.error(`[Handler ${this.name}] Error occurred:`, error.message);
-      console.error(`[Handler ${this.name}] Error stack:`, error.stack);
-      
-      // Return error response in new format
       return {
         status: 'error',
         error: error.message,
         code: error.code || 'TOOL_ERROR',
         details: {
           tool: this.name,
-          params: this.summarizeParams(params),
+          params: this.summarizeParams(safeParams),
+          validation: error instanceof SchemaValidationError ? error.errors : undefined,
           stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         }
       };
@@ -115,6 +111,30 @@ export class BaseToolHandler {
       .join(', ');
   }
 
+  normalizeExecutionResult(result) {
+    if (
+      result &&
+      typeof result === 'object' &&
+      result.isError === true &&
+      Array.isArray(result.content)
+    ) {
+      const error = new Error(result.content[0]?.text || 'Tool execution failed');
+      error.code = result.structuredContent?.code || 'TOOL_ERROR';
+      throw error;
+    }
+
+    if (
+      result &&
+      typeof result === 'object' &&
+      Array.isArray(result.content) &&
+      result.structuredContent !== undefined
+    ) {
+      return result.structuredContent;
+    }
+
+    return result;
+  }
+
   /**
    * Returns the tool definition for MCP
    * @returns {object} Tool definition
@@ -123,7 +143,9 @@ export class BaseToolHandler {
     return {
       name: this.name,
       description: this.description,
-      inputSchema: this.inputSchema
+      inputSchema: this.inputSchema,
+      outputSchema: this.outputSchema,
+      annotations: this.annotations
     };
   }
 }

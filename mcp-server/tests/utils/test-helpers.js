@@ -247,7 +247,7 @@ export class TestEnvironment {
  */
 export function createMockUnityConnection(options = {}) {
   const mockConnection = {
-    sendCommand: mock.fn(async () => options.sendCommandResult || {}),
+    sendCommand: mock.fn(async () => unwrapMockUnityResponse(options.sendCommandResult || {})),
     isConnected: mock.fn(() => true),
     connect: mock.fn(async () => {}),
     disconnect: mock.fn(async () => {}),
@@ -255,6 +255,19 @@ export function createMockUnityConnection(options = {}) {
   };
   
   return mockConnection;
+}
+
+function unwrapMockUnityResponse(response) {
+  if (
+    response &&
+    typeof response === 'object' &&
+    response.status === 'success' &&
+    Object.prototype.hasOwnProperty.call(response, 'result')
+  ) {
+    return response.result;
+  }
+
+  return response;
 }
 
 /**

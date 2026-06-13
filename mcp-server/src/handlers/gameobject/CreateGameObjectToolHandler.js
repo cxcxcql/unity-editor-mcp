@@ -104,25 +104,16 @@ export class CreateGameObjectToolHandler extends BaseToolHandler {
    * @returns {Promise<object>} Created GameObject info
    */
   async execute(params) {
-    console.error('[CreateGameObject] Starting execution with params:', params);
-    
     // Ensure connected
     if (!this.unityConnection.isConnected()) {
-      console.error('[CreateGameObject] Not connected to Unity, attempting to connect...');
       await this.unityConnection.connect();
-      console.error('[CreateGameObject] Connected to Unity');
-    } else {
-      console.error('[CreateGameObject] Already connected to Unity');
     }
     
     // Send create_gameobject command
-    console.error('[CreateGameObject] Sending command to Unity...');
     const result = await this.unityConnection.sendCommand('create_gameobject', params);
-    console.error('[CreateGameObject] Received result from Unity:', result);
     
     // Check for errors from Unity
     if (result.error) {
-      console.error('[CreateGameObject] Unity returned error:', result.error);
       throw new Error(result.error);
     }
     

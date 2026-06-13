@@ -32,6 +32,78 @@ namespace UnityEditorMCP.Core
         private static double lastRegistryWriteTime;
         private static int mainThreadId;
         private static volatile bool registryWritePending;
+        private delegate object CommandHandlerDelegate(Command command);
+        private static readonly Dictionary<string, CommandHandlerDelegate> CommandHandlers =
+            new Dictionary<string, CommandHandlerDelegate>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "ping", HandlePing },
+                { "get_project_info", command => UnityInstanceRegistry.GetProjectInfo(currentPort, Status) },
+                { "read_logs", command => HandleReadLogs(command.Parameters) },
+                { "clear_logs", command => HandleClearLogs() },
+                { "refresh_assets", command => HandleRefreshAssets() },
+                { "create_gameobject", command => GameObjectHandler.CreateGameObject(command.Parameters) },
+                { "find_gameobject", command => GameObjectHandler.FindGameObjects(command.Parameters) },
+                { "modify_gameobject", command => GameObjectHandler.ModifyGameObject(command.Parameters) },
+                { "delete_gameobject", command => GameObjectHandler.DeleteGameObject(command.Parameters) },
+                { "get_hierarchy", command => GameObjectHandler.GetHierarchy(command.Parameters) },
+                { "create_scene", command => SceneHandler.CreateScene(command.Parameters) },
+                { "load_scene", command => SceneHandler.LoadScene(command.Parameters) },
+                { "save_scene", command => SceneHandler.SaveScene(command.Parameters) },
+                { "list_scenes", command => SceneHandler.ListScenes(command.Parameters) },
+                { "get_scene_info", command => SceneHandler.GetSceneInfo(command.Parameters) },
+                { "get_gameobject_details", command => SceneAnalysisHandler.GetGameObjectDetails(command.Parameters) },
+                { "analyze_scene_contents", command => SceneAnalysisHandler.AnalyzeSceneContents(command.Parameters) },
+                { "get_component_values", command => SceneAnalysisHandler.GetComponentValues(command.Parameters) },
+                { "find_by_component", command => SceneAnalysisHandler.FindByComponent(command.Parameters) },
+                { "get_object_references", command => SceneAnalysisHandler.GetObjectReferences(command.Parameters) },
+                { "play_game", command => PlayModeHandler.HandleCommand("play_game", command.Parameters) },
+                { "pause_game", command => PlayModeHandler.HandleCommand("pause_game", command.Parameters) },
+                { "stop_game", command => PlayModeHandler.HandleCommand("stop_game", command.Parameters) },
+                { "get_editor_state", command => PlayModeHandler.HandleCommand("get_editor_state", command.Parameters) },
+                { "find_ui_elements", command => UIInteractionHandler.FindUIElements(command.Parameters) },
+                { "click_ui_element", command => UIInteractionHandler.ClickUIElement(command.Parameters) },
+                { "get_ui_element_state", command => UIInteractionHandler.GetUIElementState(command.Parameters) },
+                { "set_ui_element_value", command => UIInteractionHandler.SetUIElementValue(command.Parameters) },
+                { "simulate_ui_input", command => UIInteractionHandler.SimulateUIInput(command.Parameters) },
+                { "create_prefab", command => AssetManagementHandler.CreatePrefab(command.Parameters) },
+                { "modify_prefab", command => AssetManagementHandler.ModifyPrefab(command.Parameters) },
+                { "instantiate_prefab", command => AssetManagementHandler.InstantiatePrefab(command.Parameters) },
+                { "create_material", command => AssetManagementHandler.CreateMaterial(command.Parameters) },
+                { "modify_material", command => AssetManagementHandler.ModifyMaterial(command.Parameters) },
+                { "open_prefab", command => AssetManagementHandler.OpenPrefab(command.Parameters) },
+                { "exit_prefab_mode", command => AssetManagementHandler.ExitPrefabMode(command.Parameters) },
+                { "save_prefab", command => AssetManagementHandler.SavePrefab(command.Parameters) },
+                { "create_script", command => ScriptHandler.CreateScript(command.Parameters) },
+                { "read_script", command => ScriptHandler.ReadScript(command.Parameters) },
+                { "update_script", command => ScriptHandler.UpdateScript(command.Parameters) },
+                { "delete_script", command => ScriptHandler.DeleteScript(command.Parameters) },
+                { "list_scripts", command => ScriptHandler.ListScripts(command.Parameters) },
+                { "validate_script", command => ScriptHandler.ValidateScript(command.Parameters) },
+                { "execute_menu_item", command => MenuHandler.ExecuteMenuItem(command.Parameters) },
+                { "clear_console", command => ConsoleHandler.ClearConsole(command.Parameters) },
+                { "enhanced_read_logs", command => ConsoleHandler.EnhancedReadLogs(command.Parameters) },
+                { "capture_screenshot", command => ScreenshotHandler.CaptureScreenshot(command.Parameters) },
+                { "analyze_screenshot", command => ScreenshotHandler.AnalyzeScreenshot(command.Parameters) },
+                { "add_component", command => ComponentHandler.AddComponent(command.Parameters) },
+                { "remove_component", command => ComponentHandler.RemoveComponent(command.Parameters) },
+                { "modify_component", command => ComponentHandler.ModifyComponent(command.Parameters) },
+                { "list_components", command => ComponentHandler.ListComponents(command.Parameters) },
+                { "start_compilation_monitoring", command => CompilationHandler.StartCompilationMonitoring(command.Parameters) },
+                { "stop_compilation_monitoring", command => CompilationHandler.StopCompilationMonitoring(command.Parameters) },
+                { "get_compilation_state", command => CompilationHandler.GetCompilationState(command.Parameters) },
+                { "manage_tags", command => TagManagementHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "manage_layers", command => LayerManagementHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "manage_selection", command => SelectionHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "manage_windows", command => WindowManagementHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "manage_tools", command => ToolManagementHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "manage_asset_import_settings", command => AssetImportSettingsHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "manage_asset_database", command => AssetDatabaseHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "analyze_asset_dependencies", command => AssetDependencyHandler.HandleCommand(GetAction(command), command.Parameters) },
+                { "list_tests", command => TestRunnerHandler.ListTests(command.Parameters) },
+                { "run_tests", command => TestRunnerHandler.RunTests(command.Parameters) },
+                { "get_test_results", command => TestRunnerHandler.GetTestResults(command.Parameters) },
+                { "cancel_tests", command => TestRunnerHandler.CancelTests(command.Parameters) }
+            };
         
         private static McpStatus _status = McpStatus.NotConfigured;
         public static McpStatus Status
@@ -271,15 +343,19 @@ namespace UnityEditorMCP.Core
                             messageBuffer.RemoveRange(0, 4 + messageLength);
                             
                             var json = Encoding.UTF8.GetString(messageBytes);
-                            Debug.Log($"[Unity Editor MCP] Received command (length={messageLength}): {json}");
+                            Debug.Log($"[Unity Editor MCP] Received command (length={messageLength}): {RedactCommandJson(json)}");
                             
                             try
                             {
                                 // Handle special ping command
                                 if (json.Trim().ToLower() == "ping")
                                 {
-                                    var pongResponse = Response.Pong();
-                                    await SendFramedMessage(stream, pongResponse, cancellationToken);
+                                    var authError = Response.ErrorResult(
+                                        "Plain ping requires an authenticated JSON command envelope",
+                                        "AUTH_FAILED",
+                                        null
+                                    );
+                                    await SendFramedMessage(stream, authError, cancellationToken);
                                     continue;
                                 }
                                 
@@ -382,447 +458,35 @@ namespace UnityEditorMCP.Core
         {
             try
             {
-                Debug.Log($"[Unity Editor MCP] Processing command: {JsonConvert.SerializeObject(command)}");
+                Debug.Log($"[Unity Editor MCP] Processing command: {command}");
                 
                 string response;
-                
-                // Handle command based on type
-                switch (command.Type?.ToLower())
-                {
-                    case "ping":
-                        var pongData = new
-                        {
-                            message = "pong",
-                            echo = command.Parameters?["message"]?.ToString(),
-                            timestamp = System.DateTime.UtcNow.ToString("o"),
-                            unityVersion = Application.unityVersion,
-                            projectPath = UnityInstanceRegistry.ProjectPath,
-                            workspaceId = UnityInstanceRegistry.WorkspaceId,
-                            workspaceIdSource = UnityInstanceRegistry.WorkspaceIdSource,
-                            git = UnityInstanceRegistry.GitInfo,
-                            port = currentPort,
-                            packageVersion = UnityInstanceRegistry.PackageVersion
-                        };
-                        // Use new format with command ID
-                        response = Response.SuccessResult(command.Id, pongData);
-                        break;
 
-                    case "get_project_info":
-                        response = Response.SuccessResult(command.Id, UnityInstanceRegistry.GetProjectInfo(currentPort, Status));
-                        break;
-                        
-                    case "read_logs":
-                        // Parse parameters
-                        int count = 100;
-                        string logTypeFilter = null;
-                        
-                        if (command.Parameters != null)
-                        {
-                            if (command.Parameters.ContainsKey("count"))
-                            {
-                                if (int.TryParse(command.Parameters["count"].ToString(), out int parsedCount))
-                                {
-                                    count = Math.Min(Math.Max(parsedCount, 1), 1000); // Clamp between 1 and 1000
-                                }
-                            }
-                            
-                            if (command.Parameters.ContainsKey("logType"))
-                            {
-                                logTypeFilter = command.Parameters["logType"].ToString();
-                            }
-                        }
-                        
-                        // Get logs
-                        LogType? filterType = null;
-                        if (!string.IsNullOrEmpty(logTypeFilter))
-                        {
-                            if (Enum.TryParse<LogType>(logTypeFilter, true, out LogType parsed))
-                            {
-                                filterType = parsed;
-                            }
-                        }
-                        
-                        var logs = LogCapture.GetLogs(count, filterType);
-                        var logData = new List<object>();
-                        
-                        foreach (var log in logs)
-                        {
-                            logData.Add(new
-                            {
-                                message = log.message,
-                                stackTrace = log.stackTrace,
-                                logType = log.logType.ToString(),
-                                timestamp = log.timestamp.ToString("o")
-                            });
-                        }
-                        
-                        response = Response.SuccessResult(command.Id, new
-                        {
-                            logs = logData,
-                            count = logData.Count,
-                            totalCaptured = logs.Count
-                        });
-                        break;
-                        
-                    case "clear_logs":
-                        LogCapture.ClearLogs();
-                        response = Response.SuccessResult(command.Id, new
-                        {
-                            message = "Logs cleared successfully",
-                            timestamp = System.DateTime.UtcNow.ToString("o")
-                        });
-                        break;
-                        
-                    case "refresh_assets":
-                        // Trigger Unity to recompile and refresh assets
-                        AssetDatabase.Refresh();
-                        
-                        // Check if Unity is compiling
-                        bool isCompiling = EditorApplication.isCompiling;
-                        
-                        response = Response.SuccessResult(command.Id, new
-                        {
-                            message = "Asset refresh triggered",
-                            isCompiling = isCompiling,
-                            timestamp = System.DateTime.UtcNow.ToString("o")
-                        });
-                        break;
-                        
-                    case "create_gameobject":
-                        var createResult = GameObjectHandler.CreateGameObject(command.Parameters);
-                        response = Response.SuccessResult(command.Id, createResult);
-                        break;
-                        
-                    case "find_gameobject":
-                        var findResult = GameObjectHandler.FindGameObjects(command.Parameters);
-                        response = Response.SuccessResult(command.Id, findResult);
-                        break;
-                        
-                    case "modify_gameobject":
-                        var modifyResult = GameObjectHandler.ModifyGameObject(command.Parameters);
-                        response = Response.SuccessResult(command.Id, modifyResult);
-                        break;
-                        
-                    case "delete_gameobject":
-                        var deleteResult = GameObjectHandler.DeleteGameObject(command.Parameters);
-                        response = Response.SuccessResult(command.Id, deleteResult);
-                        break;
-                        
-                    case "get_hierarchy":
-                        var hierarchyResult = GameObjectHandler.GetHierarchy(command.Parameters);
-                        response = Response.SuccessResult(command.Id, hierarchyResult);
-                        break;
-                        
-                    case "create_scene":
-                        var createSceneResult = SceneHandler.CreateScene(command.Parameters);
-                        response = Response.SuccessResult(command.Id, createSceneResult);
-                        break;
-                        
-                    case "load_scene":
-                        var loadSceneResult = SceneHandler.LoadScene(command.Parameters);
-                        response = Response.SuccessResult(command.Id, loadSceneResult);
-                        break;
-                        
-                    case "save_scene":
-                        var saveSceneResult = SceneHandler.SaveScene(command.Parameters);
-                        response = Response.SuccessResult(command.Id, saveSceneResult);
-                        break;
-                        
-                    case "list_scenes":
-                        var listScenesResult = SceneHandler.ListScenes(command.Parameters);
-                        response = Response.SuccessResult(command.Id, listScenesResult);
-                        break;
-                        
-                    case "get_scene_info":
-                        var getSceneInfoResult = SceneHandler.GetSceneInfo(command.Parameters);
-                        response = Response.SuccessResult(command.Id, getSceneInfoResult);
-                        break;
-                        
-                    case "get_gameobject_details":
-                        var getGameObjectDetailsResult = SceneAnalysisHandler.GetGameObjectDetails(command.Parameters);
-                        response = Response.SuccessResult(command.Id, getGameObjectDetailsResult);
-                        break;
-                        
-                    case "analyze_scene_contents":
-                        var analyzeSceneResult = SceneAnalysisHandler.AnalyzeSceneContents(command.Parameters);
-                        response = Response.SuccessResult(command.Id, analyzeSceneResult);
-                        break;
-                        
-                    case "get_component_values":
-                        var getComponentValuesResult = SceneAnalysisHandler.GetComponentValues(command.Parameters);
-                        response = Response.SuccessResult(command.Id, getComponentValuesResult);
-                        break;
-                        
-                    case "find_by_component":
-                        var findByComponentResult = SceneAnalysisHandler.FindByComponent(command.Parameters);
-                        response = Response.SuccessResult(command.Id, findByComponentResult);
-                        break;
-                        
-                    case "get_object_references":
-                        var getObjectReferencesResult = SceneAnalysisHandler.GetObjectReferences(command.Parameters);
-                        response = Response.SuccessResult(command.Id, getObjectReferencesResult);
-                        break;
-                        
-                    // Play Mode Control commands
-                    case "play_game":
-                        var playResult = PlayModeHandler.HandleCommand("play_game", command.Parameters);
-                        response = Response.SuccessResult(command.Id, playResult);
-                        break;
-                        
-                    case "pause_game":
-                        var pauseResult = PlayModeHandler.HandleCommand("pause_game", command.Parameters);
-                        response = Response.SuccessResult(command.Id, pauseResult);
-                        break;
-                        
-                    case "stop_game":
-                        var stopResult = PlayModeHandler.HandleCommand("stop_game", command.Parameters);
-                        response = Response.SuccessResult(command.Id, stopResult);
-                        break;
-                        
-                    case "get_editor_state":
-                        var stateResult = PlayModeHandler.HandleCommand("get_editor_state", command.Parameters);
-                        response = Response.SuccessResult(command.Id, stateResult);
-                        break;
-                        
-                    // UI Interaction commands
-                    case "find_ui_elements":
-                        var findUIResult = UIInteractionHandler.FindUIElements(command.Parameters);
-                        response = Response.SuccessResult(command.Id, findUIResult);
-                        break;
-                        
-                    case "click_ui_element":
-                        var clickUIResult = UIInteractionHandler.ClickUIElement(command.Parameters);
-                        response = Response.SuccessResult(command.Id, clickUIResult);
-                        break;
-                        
-                    case "get_ui_element_state":
-                        var getUIStateResult = UIInteractionHandler.GetUIElementState(command.Parameters);
-                        response = Response.SuccessResult(command.Id, getUIStateResult);
-                        break;
-                        
-                    case "set_ui_element_value":
-                        var setUIValueResult = UIInteractionHandler.SetUIElementValue(command.Parameters);
-                        response = Response.SuccessResult(command.Id, setUIValueResult);
-                        break;
-                        
-                    case "simulate_ui_input":
-                        var simulateUIResult = UIInteractionHandler.SimulateUIInput(command.Parameters);
-                        response = Response.SuccessResult(command.Id, simulateUIResult);
-                        break;
-                        
-                    // Asset Management commands
-                    case "create_prefab":
-                        var createPrefabResult = AssetManagementHandler.CreatePrefab(command.Parameters);
-                        response = Response.SuccessResult(command.Id, createPrefabResult);
-                        break;
-                        
-                    case "modify_prefab":
-                        var modifyPrefabResult = AssetManagementHandler.ModifyPrefab(command.Parameters);
-                        response = Response.SuccessResult(command.Id, modifyPrefabResult);
-                        break;
-                        
-                    case "instantiate_prefab":
-                        var instantiatePrefabResult = AssetManagementHandler.InstantiatePrefab(command.Parameters);
-                        response = Response.SuccessResult(command.Id, instantiatePrefabResult);
-                        break;
-                        
-                    case "create_material":
-                        var createMaterialResult = AssetManagementHandler.CreateMaterial(command.Parameters);
-                        response = Response.SuccessResult(command.Id, createMaterialResult);
-                        break;
-                        
-                    case "modify_material":
-                        var modifyMaterialResult = AssetManagementHandler.ModifyMaterial(command.Parameters);
-                        response = Response.SuccessResult(command.Id, modifyMaterialResult);
-                        break;
-                        
-                    case "open_prefab":
-                        var openPrefabResult = AssetManagementHandler.OpenPrefab(command.Parameters);
-                        response = Response.SuccessResult(command.Id, openPrefabResult);
-                        break;
-                        
-                    case "exit_prefab_mode":
-                        var exitPrefabModeResult = AssetManagementHandler.ExitPrefabMode(command.Parameters);
-                        response = Response.SuccessResult(command.Id, exitPrefabModeResult);
-                        break;
-                        
-                    case "save_prefab":
-                        var savePrefabResult = AssetManagementHandler.SavePrefab(command.Parameters);
-                        response = Response.SuccessResult(command.Id, savePrefabResult);
-                        break;
-                        
-                    // Script Management commands
-                    case "create_script":
-                        var createScriptResult = ScriptHandler.CreateScript(command.Parameters);
-                        response = Response.SuccessResult(command.Id, createScriptResult);
-                        break;
-                        
-                    case "read_script":
-                        var readScriptResult = ScriptHandler.ReadScript(command.Parameters);
-                        response = Response.SuccessResult(command.Id, readScriptResult);
-                        break;
-                        
-                    case "update_script":
-                        var updateScriptResult = ScriptHandler.UpdateScript(command.Parameters);
-                        response = Response.SuccessResult(command.Id, updateScriptResult);
-                        break;
-                        
-                    case "delete_script":
-                        var deleteScriptResult = ScriptHandler.DeleteScript(command.Parameters);
-                        response = Response.SuccessResult(command.Id, deleteScriptResult);
-                        break;
-                        
-                    case "list_scripts":
-                        var listScriptsResult = ScriptHandler.ListScripts(command.Parameters);
-                        response = Response.SuccessResult(command.Id, listScriptsResult);
-                        break;
-                        
-                    case "validate_script":
-                        var validateScriptResult = ScriptHandler.ValidateScript(command.Parameters);
-                        response = Response.SuccessResult(command.Id, validateScriptResult);
-                        break;
-                        
-                    case "execute_menu_item":
-                        var executeMenuResult = MenuHandler.ExecuteMenuItem(command.Parameters);
-                        response = Response.SuccessResult(command.Id, executeMenuResult);
-                        break;
-                        
-                    case "clear_console":
-                        var clearConsoleResult = ConsoleHandler.ClearConsole(command.Parameters);
-                        response = Response.SuccessResult(command.Id, clearConsoleResult);
-                        break;
-                        
-                    case "enhanced_read_logs":
-                        var enhancedReadLogsResult = ConsoleHandler.EnhancedReadLogs(command.Parameters);
-                        response = Response.SuccessResult(command.Id, enhancedReadLogsResult);
-                        break;
-                        
-                    // Screenshot commands
-                    case "capture_screenshot":
-                        var captureScreenshotResult = ScreenshotHandler.CaptureScreenshot(command.Parameters);
-                        response = Response.SuccessResult(command.Id, captureScreenshotResult);
-                        break;
-                        
-                    case "analyze_screenshot":
-                        var analyzeScreenshotResult = ScreenshotHandler.AnalyzeScreenshot(command.Parameters);
-                        response = Response.SuccessResult(command.Id, analyzeScreenshotResult);
-                        break;
-                        
-                    // Component commands
-                    case "add_component":
-                        var addComponentResult = ComponentHandler.AddComponent(command.Parameters);
-                        response = Response.SuccessResult(command.Id, addComponentResult);
-                        break;
-                        
-                    case "remove_component":
-                        var removeComponentResult = ComponentHandler.RemoveComponent(command.Parameters);
-                        response = Response.SuccessResult(command.Id, removeComponentResult);
-                        break;
-                        
-                    case "modify_component":
-                        var modifyComponentResult = ComponentHandler.ModifyComponent(command.Parameters);
-                        response = Response.SuccessResult(command.Id, modifyComponentResult);
-                        break;
-                        
-                    case "list_components":
-                        var listComponentsResult = ComponentHandler.ListComponents(command.Parameters);
-                        response = Response.SuccessResult(command.Id, listComponentsResult);
-                        break;
-                        
-                    // Compilation monitoring commands
-                    case "start_compilation_monitoring":
-                        var startMonitoringResult = CompilationHandler.StartCompilationMonitoring(command.Parameters);
-                        response = Response.SuccessResult(command.Id, startMonitoringResult);
-                        break;
-                        
-                    case "stop_compilation_monitoring":
-                        var stopMonitoringResult = CompilationHandler.StopCompilationMonitoring(command.Parameters);
-                        response = Response.SuccessResult(command.Id, stopMonitoringResult);
-                        break;
-                        
-                    case "get_compilation_state":
-                        var compilationStateResult = CompilationHandler.GetCompilationState(command.Parameters);
-                        response = Response.SuccessResult(command.Id, compilationStateResult);
-                        break;
-                        
-                    // Tag management commands
-                    case "manage_tags":
-                        var tagManagementResult = TagManagementHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, tagManagementResult);
-                        break;
-                        
-                    // Layer management commands
-                    case "manage_layers":
-                        var layerManagementResult = LayerManagementHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, layerManagementResult);
-                        break;
-                        
-                    // Selection management commands
-                    case "manage_selection":
-                        var selectionManagementResult = SelectionHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, selectionManagementResult);
-                        break;
-                        
-                    // Window management commands
-                    case "manage_windows":
-                        var windowManagementResult = WindowManagementHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, windowManagementResult);
-                        break;
-                        
-                    // Tool management commands
-                    case "manage_tools":
-                        var toolManagementResult = ToolManagementHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, toolManagementResult);
-                        break;
-                        
-                    // Asset import settings commands
-                    case "manage_asset_import_settings":
-                        var assetImportSettingsResult = AssetImportSettingsHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, assetImportSettingsResult);
-                        break;
-                        
-                    // Asset database commands
-                    case "manage_asset_database":
-                        var assetDatabaseResult = AssetDatabaseHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, assetDatabaseResult);
-                        break;
-                        
-                    // Asset dependency analysis commands
-                    case "analyze_asset_dependencies":
-                        var assetDependencyResult = AssetDependencyHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
-                        response = Response.SuccessResult(command.Id, assetDependencyResult);
-                        break;
-                        
-                    // Test Runner commands
-                    case "list_tests":
-                        var listTestsResult = TestRunnerHandler.ListTests(command.Parameters);
-                        response = Response.SuccessResult(command.Id, listTestsResult);
-                        break;
-                        
-                    case "run_tests":
-                        var runTestsResult = TestRunnerHandler.RunTests(command.Parameters);
-                        response = Response.SuccessResult(command.Id, runTestsResult);
-                        break;
-                        
-                    case "get_test_results":
-                        var getTestResultsResult = TestRunnerHandler.GetTestResults(command.Parameters);
-                        response = Response.SuccessResult(command.Id, getTestResultsResult);
-                        break;
-                        
-                    case "cancel_tests":
-                        var cancelTestsResult = TestRunnerHandler.CancelTests(command.Parameters);
-                        response = Response.SuccessResult(command.Id, cancelTestsResult);
-                        break;
-                        
-                    default:
-                        // Use new format with error details
-                        response = Response.ErrorResult(
-                            command.Id,
-                            $"Unknown command type: {command.Type}", 
-                            "UNKNOWN_COMMAND",
-                            new { commandType = command.Type }
-                        );
-                        break;
+                if (!IsAuthorized(command))
+                {
+                    response = Response.ErrorResult(
+                        command.Id,
+                        "Invalid or missing Unity Editor MCP auth token",
+                        "AUTH_FAILED",
+                        new { commandType = command.Type }
+                    );
+                }
+                else
+                {
+                
+                if (TryExecuteRegisteredCommand(command, out object commandResult))
+                {
+                    response = Response.SuccessResult(command.Id, commandResult);
+                }
+                else
+                {
+                    response = Response.ErrorResult(
+                        command.Id,
+                        $"Unknown command type: {command.Type}",
+                        "UNKNOWN_COMMAND",
+                        new { commandType = command.Type }
+                    );
+                }
                 }
                 
                 // Send response
@@ -922,6 +586,139 @@ namespace UnityEditorMCP.Core
             else
             {
                 registryWritePending = true;
+            }
+        }
+
+        private static bool IsAuthorized(Command command)
+        {
+            return command != null &&
+                   !string.IsNullOrEmpty(command.AuthToken) &&
+                   string.Equals(command.AuthToken, UnityInstanceRegistry.AuthToken, StringComparison.Ordinal);
+        }
+
+        private static bool TryExecuteRegisteredCommand(Command command, out object result)
+        {
+            result = null;
+            if (command == null || string.IsNullOrEmpty(command.Type))
+            {
+                return false;
+            }
+
+            if (!CommandHandlers.TryGetValue(command.Type, out CommandHandlerDelegate handler))
+            {
+                return false;
+            }
+
+            result = handler(command);
+            return true;
+        }
+
+        private static object HandlePing(Command command)
+        {
+            return new
+            {
+                message = "pong",
+                echo = command.Parameters?["message"]?.ToString(),
+                timestamp = DateTime.UtcNow.ToString("o"),
+                unityVersion = Application.unityVersion,
+                projectPath = UnityInstanceRegistry.ProjectPath,
+                workspaceId = UnityInstanceRegistry.WorkspaceId,
+                workspaceIdSource = UnityInstanceRegistry.WorkspaceIdSource,
+                git = UnityInstanceRegistry.GitInfo,
+                port = currentPort,
+                packageVersion = UnityInstanceRegistry.PackageVersion
+            };
+        }
+
+        private static object HandleReadLogs(JObject parameters)
+        {
+            int count = 100;
+            string logTypeFilter = null;
+
+            if (parameters != null)
+            {
+                if (parameters.ContainsKey("count") &&
+                    int.TryParse(parameters["count"].ToString(), out int parsedCount))
+                {
+                    count = Math.Min(Math.Max(parsedCount, 1), 1000);
+                }
+
+                if (parameters.ContainsKey("logType"))
+                {
+                    logTypeFilter = parameters["logType"].ToString();
+                }
+            }
+
+            LogType? filterType = null;
+            if (!string.IsNullOrEmpty(logTypeFilter) &&
+                Enum.TryParse(logTypeFilter, true, out LogType parsed))
+            {
+                filterType = parsed;
+            }
+
+            var logs = LogCapture.GetLogs(count, filterType);
+            var logData = new List<object>();
+
+            foreach (var log in logs)
+            {
+                logData.Add(new
+                {
+                    message = log.message,
+                    stackTrace = log.stackTrace,
+                    logType = log.logType.ToString(),
+                    timestamp = log.timestamp.ToString("o")
+                });
+            }
+
+            return new
+            {
+                logs = logData,
+                count = logData.Count,
+                totalCaptured = logs.Count
+            };
+        }
+
+        private static object HandleClearLogs()
+        {
+            LogCapture.ClearLogs();
+            return new
+            {
+                message = "Logs cleared successfully",
+                timestamp = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        private static object HandleRefreshAssets()
+        {
+            AssetDatabase.Refresh();
+            return new
+            {
+                message = "Asset refresh triggered",
+                isCompiling = EditorApplication.isCompiling,
+                timestamp = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        private static string GetAction(Command command)
+        {
+            return command.Parameters?["action"]?.ToString();
+        }
+
+        private static string RedactCommandJson(string json)
+        {
+            try
+            {
+                var token = JObject.Parse(json);
+                if (token["authToken"] != null)
+                {
+                    token["authToken"] = "[redacted]";
+                }
+
+                return token.ToString(Formatting.None);
+            }
+            catch
+            {
+                return json;
             }
         }
     }

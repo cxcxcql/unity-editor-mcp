@@ -1,5 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
-import { findByComponentToolDefinition, findByComponentHandler } from '../../tools/analysis/findByComponent.js';
+import { findByComponentToolDefinition } from '../../tools/analysis/findByComponent.js';
 
 /**
  * Handler for the find_by_component tool
@@ -15,6 +15,17 @@ export class FindByComponentToolHandler extends BaseToolHandler {
   }
 
   async execute(args) {
-    return findByComponentHandler(this.unityConnection, args);
+    if (!this.unityConnection.isConnected()) {
+      throw new Error('Unity connection not available');
+    }
+
+    const result = await this.unityConnection.sendCommand('find_by_component', args);
+    if (result?.error) {
+      const error = new Error(result.error);
+      error.code = 'UNITY_ERROR';
+      throw error;
+    }
+
+    return result;
   }
 }

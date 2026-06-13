@@ -17,6 +17,7 @@ namespace UnityEditorMCP.Tests.Models
             {
                 Id = "test-123",
                 Type = "ping",
+                AuthToken = "token-123",
                 Parameters = new JObject
                 {
                     ["timeout"] = 5000
@@ -30,6 +31,7 @@ namespace UnityEditorMCP.Tests.Models
             // Assert
             Assert.AreEqual(command.Id, deserialized.Id);
             Assert.AreEqual(command.Type, deserialized.Type);
+            Assert.AreEqual(command.AuthToken, deserialized.AuthToken);
             Assert.AreEqual(command.Parameters["timeout"].Value<int>(), 
                           deserialized.Parameters["timeout"].Value<int>());
         }
@@ -92,6 +94,7 @@ namespace UnityEditorMCP.Tests.Models
             var json = @"{
                 ""id"": ""cmd-001"",
                 ""type"": ""ping"",
+                ""authToken"": ""token-001"",
                 ""params"": {
                     ""echo"": ""hello""
                 }
@@ -103,6 +106,7 @@ namespace UnityEditorMCP.Tests.Models
             // Assert
             Assert.AreEqual("cmd-001", command.Id);
             Assert.AreEqual("ping", command.Type);
+            Assert.AreEqual("token-001", command.AuthToken);
             Assert.AreEqual("hello", command.Parameters["echo"].Value<string>());
         }
     }

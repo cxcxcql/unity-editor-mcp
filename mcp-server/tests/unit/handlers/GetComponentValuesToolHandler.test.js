@@ -57,19 +57,17 @@ describe('GetComponentValuesToolHandler', () => {
       
       assert.equal(mockConnection.sendCommand.mock.calls.length, 1);
       assert.ok(result);
-      assert.ok(result.content);
-      assert.equal(result.isError, false);
-      assert.ok(result.content[0].text.includes("Light component"));
+      assert.equal(result.componentType, "Light");
+      assert.ok(result.summary.includes("Light component"));
     });
 
     it('should return error if not connected', async () => {
       mockConnection.isConnected.mock.mockImplementation(() => false);
       
-      const result = await handler.execute({"gameObjectName":"TestObject","componentType":"Light"});
-      
-      assert.ok(result);
-      assert.equal(result.isError, true);
-      assert.ok(result.content[0].text.includes('Unity connection not available'));
+      await assert.rejects(
+        async () => await handler.execute({"gameObjectName":"TestObject","componentType":"Light"}),
+        /Unity connection not available/
+      );
     });
   });
 
@@ -79,8 +77,8 @@ describe('GetComponentValuesToolHandler', () => {
       
       assert.equal(result.status, 'success');
       assert.ok(result.result);
-      assert.ok(result.result.content);
-      assert.equal(result.result.isError, false);
+      assert.equal(result.result.componentType, "Light");
+      assert.ok(result.result.summary.includes("Light component"));
     });
 
     it('should return error for validation failure', async () => {

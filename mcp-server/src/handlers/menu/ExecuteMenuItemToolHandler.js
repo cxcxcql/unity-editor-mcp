@@ -104,9 +104,13 @@ export class ExecuteMenuItemToolHandler extends BaseToolHandler {
       throw new Error('menuPath cannot be empty');
     }
 
+    if (safetyCheck === false && !this.allowUnsafeMenuOverride()) {
+      throw new Error('safetyCheck: false requires UNITY_MCP_ALLOW_UNSAFE_MENU=1 in the MCP server environment');
+    }
+
     // Safety check for blacklisted items with security normalization (BEFORE format validation)
     if (safetyCheck && this.isMenuPathBlacklisted(menuPath)) {
-      throw new Error(`Menu item is blacklisted for safety: ${menuPath}. Use safetyCheck: false to override.`);
+      throw new Error(`Menu item is blacklisted for safety: ${menuPath}. Set UNITY_MCP_ALLOW_UNSAFE_MENU=1 before using safetyCheck: false.`);
     }
 
     // Validate menu path format (should contain at least one slash) - after normalization for security
@@ -135,6 +139,10 @@ export class ExecuteMenuItemToolHandler extends BaseToolHandler {
       safetyCheck = true
     } = params;
 
+    const effectiveSafetyCheck = safetyCheck === false && this.allowUnsafeMenuOverride()
+      ? false
+      : true;
+
     // Ensure connection to Unity
     if (!this.unityConnection.isConnected()) {
       await this.unityConnection.connect();
@@ -150,7 +158,7 @@ export class ExecuteMenuItemToolHandler extends BaseToolHandler {
     const commandParams = {
       action,
       menuPath: resolvedMenuPath,
-      safetyCheck
+      safetyCheck: effectiveSafetyCheck
     };
 
     // Add optional parameters
@@ -302,5 +310,10 @@ export class ExecuteMenuItemToolHandler extends BaseToolHandler {
     }
     
     return normalized;
+  }
+
+  allowUnsafeMenuOverride() {
+    return process.env.UNITY_MCP_ALLOW_UNSAFE_MENU === '1' ||
+      process.env.UNITY_MCP_ALLOW_UNSAFE_MENU === 'true';
   }
 }

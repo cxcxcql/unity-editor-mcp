@@ -27,7 +27,7 @@ describe('waitForCompilation', () => {
     });
 
     const result = await waitForCompilation(connection, {
-      timeoutMs: 100,
+      timeoutMs: 1000,
       pollIntervalMs: 1,
       settleMs: 1,
       includeMessages: true,

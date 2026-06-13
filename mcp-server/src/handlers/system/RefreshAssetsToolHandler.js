@@ -50,17 +50,29 @@ export class RefreshAssetsToolHandler extends BaseToolHandler {
    * @param {object} params - Input parameters (none required)
    * @returns {Promise<object>} Refresh result
    */
-  async execute(params) {
+  async execute(params, context) {
     // Ensure connected
     if (!this.unityConnection.isConnected()) {
       await this.unityConnection.connect();
     }
     
     // Send refresh_assets command
+    await context?.sendProgress?.({
+      progress: 0,
+      total: 1,
+      message: 'Requesting Unity asset refresh'
+    });
+
     const result = await this.unityConnection.sendCommand('refresh_assets', {});
     const compilation = params.waitForCompletion
-      ? await waitForCompilation(this.unityConnection, params)
+      ? await waitForCompilation(this.unityConnection, params, context)
       : undefined;
+
+    await context?.sendProgress?.({
+      progress: 1,
+      total: 1,
+      message: 'Unity asset refresh request complete'
+    });
     
     return {
       message: result.message,

@@ -25,7 +25,17 @@ export class LoadSceneToolHandler extends BaseToolHandler {
             description: 'How to load the scene. Single replaces current scene(s), Additive adds to current scene(s) (default: Single)'
           }
         },
-        required: []
+        required: [],
+        oneOf: [
+          {
+            required: ['scenePath'],
+            not: { required: ['sceneName'] }
+          },
+          {
+            required: ['sceneName'],
+            not: { required: ['scenePath'] }
+          }
+        ]
       }
     );
     this.unityConnection = unityConnection;

@@ -16,6 +16,7 @@ namespace UnityEditorMCP.Core
 
         private static readonly int ProcessId = Process.GetCurrentProcess().Id;
         private static readonly string InstanceId = Guid.NewGuid().ToString("N");
+        private static readonly string InstanceAuthToken = Guid.NewGuid().ToString("N");
         private static readonly string StartedAt = DateTime.UtcNow.ToString("o");
         private static readonly ProjectIdentity Identity = LoadProjectIdentity();
 
@@ -62,6 +63,14 @@ namespace UnityEditorMCP.Core
             }
         }
 
+        public static string AuthToken
+        {
+            get
+            {
+                return InstanceAuthToken;
+            }
+        }
+
         public static string WorkspaceIdSource
         {
             get
@@ -83,7 +92,7 @@ namespace UnityEditorMCP.Core
             try
             {
                 Directory.CreateDirectory(RegistryDirectory);
-                File.WriteAllText(RegistryFilePath, JsonConvert.SerializeObject(CreatePayload(port, status), Formatting.Indented));
+                File.WriteAllText(RegistryFilePath, JsonConvert.SerializeObject(CreatePayload(port, status, includeAuthToken: true), Formatting.Indented));
             }
             catch (Exception ex)
             {
@@ -127,13 +136,14 @@ namespace UnityEditorMCP.Core
             }
         }
 
-        private static object CreatePayload(int port, McpStatus status, bool includeRegistryPath = false)
+        private static object CreatePayload(int port, McpStatus status, bool includeRegistryPath = false, bool includeAuthToken = false)
         {
             var activeScene = EditorSceneManager.GetActiveScene();
             return new
             {
                 schemaVersion = 2,
                 instanceId = InstanceId,
+                authToken = includeAuthToken ? InstanceAuthToken : null,
                 projectPath = ProjectPath,
                 projectName = new DirectoryInfo(ProjectPath).Name,
                 workspaceId = WorkspaceId,

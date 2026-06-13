@@ -1,5 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
-import { analyzeSceneContentsToolDefinition, analyzeSceneContentsHandler } from '../../tools/analysis/analyzeSceneContents.js';
+import { analyzeSceneContentsToolDefinition } from '../../tools/analysis/analyzeSceneContents.js';
 
 /**
  * Handler for analyze_scene_contents tool
@@ -12,24 +12,25 @@ export class AnalyzeSceneContentsToolHandler extends BaseToolHandler {
             analyzeSceneContentsToolDefinition.inputSchema
         );
         this.unityConnection = unityConnection;
-        this.handler = analyzeSceneContentsHandler;
     }
 
     async execute(args) {
-        // Check connection
         if (!this.unityConnection.isConnected()) {
             throw new Error('Unity connection not available');
         }
 
-        // Use the handler function
-        const result = await this.handler(this.unityConnection, args);
-        
-        // If the handler returns an error response, throw it
-        if (result.isError) {
-            throw new Error(result.content[0].text);
+        const result = await this.unityConnection.sendCommand('analyze_scene_contents', args);
+
+        if (!result || typeof result === 'string') {
+            throw new Error('Invalid response format');
         }
-        
-        // Return the content
+
+        if (result.error) {
+            const error = new Error(result.error);
+            error.code = 'UNITY_ERROR';
+            throw error;
+        }
+
         return result;
     }
 }

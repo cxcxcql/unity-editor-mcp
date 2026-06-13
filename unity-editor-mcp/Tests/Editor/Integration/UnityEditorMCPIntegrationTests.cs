@@ -2,11 +2,11 @@ using NUnit.Framework;
 using UnityEditorMCP.Core;
 using UnityEditorMCP.Models;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-using UnityEngine;
+using Newtonsoft.Json.Linq;
 using System;
 
 namespace UnityEditorMCP.Tests.Integration
@@ -14,7 +14,6 @@ namespace UnityEditorMCP.Tests.Integration
     [TestFixture]
     public class UnityEditorMCPIntegrationTests
     {
-        private const int TEST_PORT = 6401; // Different port to avoid conflicts
         private const int CONNECTION_TIMEOUT_MS = 5000;
         
         [Test]
@@ -62,6 +61,7 @@ namespace UnityEditorMCP.Tests.Integration
                 {
                     Id = "test-ping-001",
                     Type = "ping",
+                    AuthToken = GetCurrentAuthToken(),
                     Parameters = new Newtonsoft.Json.Linq.JObject
                     {
                         ["message"] = "Hello Unity"
@@ -69,27 +69,14 @@ namespace UnityEditorMCP.Tests.Integration
                 };
                 
                 // Act - Send ping command
-                var commandJson = JsonConvert.SerializeObject(pingCommand);
-                var commandBytes = Encoding.UTF8.GetBytes(commandJson + "\n");
-                await stream.WriteAsync(commandBytes, 0, commandBytes.Length);
-                await stream.FlushAsync();
-                
-                // Read response
-                var buffer = new byte[1024];
-                var responseTask = stream.ReadAsync(buffer, 0, buffer.Length);
-                var completed = await Task.WhenAny(responseTask, Task.Delay(CONNECTION_TIMEOUT_MS));
-                
-                Assert.IsTrue(completed == responseTask, "Should receive response within timeout");
-                
-                var bytesRead = await responseTask;
-                var responseJson = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
-                dynamic response = JsonConvert.DeserializeObject(responseJson);
+                await SendFramedJson(stream, JsonConvert.SerializeObject(pingCommand));
+                var response = await ReadFramedJson(stream);
                 
                 // Assert
                 Assert.IsNotNull(response, "Response should not be null");
-                Assert.AreEqual("test-ping-001", (string)response.id, "Response ID should match command ID");
-                Assert.IsTrue((bool)response.success, "Response should indicate success");
-                Assert.AreEqual("pong", (string)response.data.message, "Response should contain pong message");
+                Assert.AreEqual("test-ping-001", response["id"].Value<string>(), "Response ID should match command ID");
+                Assert.AreEqual("success", response["status"].Value<string>(), "Response should indicate success");
+                Assert.AreEqual("pong", response["result"]["message"].Value<string>(), "Response should contain pong message");
             }
             finally
             {
@@ -112,25 +99,13 @@ namespace UnityEditorMCP.Tests.Integration
                 var stream = client.GetStream();
                 
                 // Act - Send invalid JSON
-                var invalidJson = "{ invalid json }\n";
-                var commandBytes = Encoding.UTF8.GetBytes(invalidJson);
-                await stream.WriteAsync(commandBytes, 0, commandBytes.Length);
-                await stream.FlushAsync();
-                
-                // Read response
-                var buffer = new byte[1024];
-                var responseTask = stream.ReadAsync(buffer, 0, buffer.Length);
-                var completed = await Task.WhenAny(responseTask, Task.Delay(CONNECTION_TIMEOUT_MS));
-                
-                Assert.IsTrue(completed == responseTask, "Should receive error response");
-                
-                var bytesRead = await responseTask;
-                var responseJson = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
-                dynamic response = JsonConvert.DeserializeObject(responseJson);
+                await SendFramedJson(stream, "{ invalid json }");
+                var response = await ReadFramedJson(stream);
                 
                 // Assert
-                Assert.IsFalse((bool)response.success, "Response should indicate failure");
-                Assert.IsTrue(((string)response.error).Contains("parse"), "Error should mention parsing issue");
+                Assert.AreEqual("error", response["status"].Value<string>(), "Response should indicate failure");
+                Assert.AreEqual("JSON_ERROR", response["code"].Value<string>(), "Response should include JSON error code");
+                Assert.IsTrue(response["error"].Value<string>().Contains("parsing"), "Error should mention parsing issue");
             }
             finally
             {
@@ -156,14 +131,11 @@ namespace UnityEditorMCP.Tests.Integration
                 await client2.ConnectAsync("127.0.0.1", UnityEditorMCP.DEFAULT_PORT);
                 
                 // Send commands from both clients
-                var command1 = new Command { Id = "client1-cmd", Type = "ping" };
-                var command2 = new Command { Id = "client2-cmd", Type = "ping" };
+                var command1 = new Command { Id = "client1-cmd", Type = "ping", AuthToken = GetCurrentAuthToken() };
+                var command2 = new Command { Id = "client2-cmd", Type = "ping", AuthToken = GetCurrentAuthToken() };
                 
-                var json1 = JsonConvert.SerializeObject(command1) + "\n";
-                var json2 = JsonConvert.SerializeObject(command2) + "\n";
-                
-                await client1.GetStream().WriteAsync(Encoding.UTF8.GetBytes(json1), 0, json1.Length);
-                await client2.GetStream().WriteAsync(Encoding.UTF8.GetBytes(json2), 0, json2.Length);
+                await SendFramedJson(client1.GetStream(), JsonConvert.SerializeObject(command1));
+                await SendFramedJson(client2.GetStream(), JsonConvert.SerializeObject(command2));
                 
                 // Assert - Both clients should be connected
                 Assert.IsTrue(client1.Connected, "Client 1 should remain connected");
@@ -225,6 +197,58 @@ namespace UnityEditorMCP.Tests.Integration
                 client?.Close();
                 client?.Dispose();
             }
+        }
+
+        private static async Task SendFramedJson(NetworkStream stream, string json)
+        {
+            var payload = Encoding.UTF8.GetBytes(json);
+            var lengthBytes = BitConverter.GetBytes(payload.Length);
+            if (BitConverter.IsLittleEndian)
+            {
+                Array.Reverse(lengthBytes);
+            }
+
+            await stream.WriteAsync(lengthBytes, 0, lengthBytes.Length);
+            await stream.WriteAsync(payload, 0, payload.Length);
+            await stream.FlushAsync();
+        }
+
+        private static async Task<JObject> ReadFramedJson(NetworkStream stream)
+        {
+            var lengthBytes = await ReadExact(stream, 4);
+            if (BitConverter.IsLittleEndian)
+            {
+                Array.Reverse(lengthBytes);
+            }
+
+            var length = BitConverter.ToInt32(lengthBytes, 0);
+            var payload = await ReadExact(stream, length);
+            return JObject.Parse(Encoding.UTF8.GetString(payload));
+        }
+
+        private static async Task<byte[]> ReadExact(NetworkStream stream, int length)
+        {
+            var buffer = new byte[length];
+            var offset = 0;
+            while (offset < length)
+            {
+                var readTask = stream.ReadAsync(buffer, offset, length - offset);
+                var completed = await Task.WhenAny(readTask, Task.Delay(CONNECTION_TIMEOUT_MS));
+                Assert.IsTrue(completed == readTask, "Should receive framed response within timeout");
+
+                var bytesRead = await readTask;
+                Assert.Greater(bytesRead, 0, "Socket closed before full frame was read");
+                offset += bytesRead;
+            }
+
+            return buffer;
+        }
+
+        private static string GetCurrentAuthToken()
+        {
+            var registryType = typeof(UnityEditorMCP).Assembly.GetType("UnityEditorMCP.Core.UnityInstanceRegistry");
+            var property = registryType.GetProperty("AuthToken", BindingFlags.Public | BindingFlags.Static);
+            return (string)property.GetValue(null);
         }
     }
 }

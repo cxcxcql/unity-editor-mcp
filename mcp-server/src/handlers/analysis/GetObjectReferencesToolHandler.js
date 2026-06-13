@@ -1,5 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
-import { getObjectReferencesToolDefinition, getObjectReferencesHandler } from '../../tools/analysis/getObjectReferences.js';
+import { getObjectReferencesToolDefinition } from '../../tools/analysis/getObjectReferences.js';
 
 /**
  * Handler for the get_object_references tool
@@ -15,6 +15,17 @@ export class GetObjectReferencesToolHandler extends BaseToolHandler {
   }
 
   async execute(args) {
-    return getObjectReferencesHandler(this.unityConnection, args);
+    if (!this.unityConnection.isConnected()) {
+      throw new Error('Unity connection not available');
+    }
+
+    const result = await this.unityConnection.sendCommand('get_object_references', args);
+    if (result?.error) {
+      const error = new Error(result.error);
+      error.code = 'UNITY_ERROR';
+      throw error;
+    }
+
+    return result;
   }
 }

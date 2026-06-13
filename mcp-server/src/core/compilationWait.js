@@ -3,7 +3,7 @@ const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_SETTLE_MS = 1000;
 const DEFAULT_MAX_MESSAGES = 50;
 
-export async function waitForCompilation(unityConnection, options = {}) {
+export async function waitForCompilation(unityConnection, options = {}, context = {}) {
   const timeoutMs = positiveNumber(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const pollIntervalMs = positiveNumber(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
   const settleMs = nonNegativeNumber(options.settleMs, DEFAULT_SETTLE_MS);
@@ -17,12 +17,16 @@ export async function waitForCompilation(unityConnection, options = {}) {
   let lastRetryableError = null;
 
   while (Date.now() <= deadline) {
+    throwIfCancelled(context.signal);
+
     try {
       latestState = await getCompilationState(unityConnection, {
         includeMessages: false,
         maxMessages
-      });
+      }, deadline, context);
       lastRetryableError = null;
+
+      await sendProgress(context, startedAt, timeoutMs, latestState);
 
       if (!latestState.isCompiling && !latestState.isUpdating) {
         if (stableSince === null) {
@@ -34,7 +38,7 @@ export async function waitForCompilation(unityConnection, options = {}) {
             ? await getCompilationState(unityConnection, {
               includeMessages: true,
               maxMessages
-            }, deadline)
+            }, deadline, context)
             : latestState;
 
           return buildResult(finalState, startedAt, {
@@ -46,6 +50,11 @@ export async function waitForCompilation(unityConnection, options = {}) {
         stableSince = null;
       }
     } catch (error) {
+      if (error.code === 'WAIT_FOR_COMPILATION_TIMEOUT') {
+        lastRetryableError = error;
+        break;
+      }
+
       if (!isRetryableConnectionError(error) || Date.now() >= deadline) {
         throw error;
       }
@@ -58,7 +67,7 @@ export async function waitForCompilation(unityConnection, options = {}) {
       stableSince = null;
     }
 
-    await sleep(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
+    await sleep(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())), context.signal);
   }
 
   return buildResult(latestState || {}, startedAt, {
@@ -68,8 +77,10 @@ export async function waitForCompilation(unityConnection, options = {}) {
   });
 }
 
-async function getCompilationState(unityConnection, params, deadline = Infinity) {
+async function getCompilationState(unityConnection, params, deadline = Infinity, context = {}) {
   while (Date.now() <= deadline) {
+    throwIfCancelled(context.signal);
+
     try {
       if (!unityConnection.isConnected()) {
         await unityConnection.connect();
@@ -86,12 +97,14 @@ async function getCompilationState(unityConnection, params, deadline = Infinity)
         throw reconnectError;
       }
       if (reconnectError) {
-        await sleep(Math.min(50, Math.max(0, deadline - Date.now())));
+        await sleep(Math.min(5, Math.max(0, deadline - Date.now())), context.signal);
       }
     }
   }
 
-  throw new Error('Timed out waiting for Unity compilation state');
+  const error = new Error('Timed out waiting for Unity compilation state');
+  error.code = 'WAIT_FOR_COMPILATION_TIMEOUT';
+  throw error;
 }
 
 async function reconnect(unityConnection) {
@@ -153,6 +166,58 @@ function nonNegativeNumber(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function sendProgress(context, startedAt, timeoutMs, state) {
+  if (typeof context.sendProgress !== 'function') {
+    return;
+  }
+
+  const elapsed = Date.now() - startedAt;
+  const waitingFor = state.isCompiling
+    ? 'Unity compilation'
+    : state.isUpdating
+      ? 'Unity asset refresh'
+      : 'Unity editor settle window';
+
+  await context.sendProgress({
+    progress: Math.min(elapsed, timeoutMs),
+    total: timeoutMs,
+    message: `Waiting for ${waitingFor}`
+  });
+}
+
+function throwIfCancelled(signal) {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  const error = new Error('Request cancelled');
+  error.code = 'REQUEST_CANCELLED';
+  throw error;
+}
+
+function sleep(ms, signal) {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    let timeout;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener?.('abort', onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      const error = new Error('Request cancelled');
+      error.code = 'REQUEST_CANCELLED';
+      reject(error);
+    };
+    timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
 }

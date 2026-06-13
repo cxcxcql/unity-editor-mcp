@@ -1,5 +1,28 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
-import { getGameObjectDetailsToolDefinition, getGameObjectDetailsHandler } from '../../tools/analysis/getGameObjectDetails.js';
+import { getGameObjectDetailsToolDefinition } from '../../tools/analysis/getGameObjectDetails.js';
+
+const inputSchema = {
+    ...getGameObjectDetailsToolDefinition.inputSchema,
+    required: [],
+    properties: {
+        ...getGameObjectDetailsToolDefinition.inputSchema.properties,
+        maxDepth: {
+            ...getGameObjectDetailsToolDefinition.inputSchema.properties.maxDepth,
+            minimum: 0,
+            maximum: 10
+        }
+    },
+    oneOf: [
+        {
+            required: ['gameObjectName'],
+            not: { required: ['path'] }
+        },
+        {
+            required: ['path'],
+            not: { required: ['gameObjectName'] }
+        }
+    ]
+};
 
 /**
  * Handler for get_gameobject_details tool
@@ -9,27 +32,28 @@ export class GetGameObjectDetailsToolHandler extends BaseToolHandler {
         super(
             getGameObjectDetailsToolDefinition.name,
             getGameObjectDetailsToolDefinition.description,
-            getGameObjectDetailsToolDefinition.inputSchema
+            inputSchema
         );
         this.unityConnection = unityConnection;
-        this.handler = getGameObjectDetailsHandler;
     }
 
     async execute(args) {
-        // Check connection
         if (!this.unityConnection.isConnected()) {
             throw new Error('Unity connection not available');
         }
 
-        // Use the handler function
-        const result = await this.handler(this.unityConnection, args);
-        
-        // If the handler returns an error response, throw it
-        if (result.isError) {
-            throw new Error(result.content[0].text);
+        const result = await this.unityConnection.sendCommand('get_gameobject_details', args);
+
+        if (!result || typeof result === 'string') {
+            throw new Error('Invalid response format');
         }
-        
-        // Return the content
+
+        if (result.error) {
+            const error = new Error(result.error);
+            error.code = 'UNITY_ERROR';
+            throw error;
+        }
+
         return result;
     }
 }

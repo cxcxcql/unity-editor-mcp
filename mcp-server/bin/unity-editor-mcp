@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { main } from '../src/core/server.js';
 import { config } from '../src/core/config.js';
-import { createDiscoveryReport, formatDiscoveryReport } from '../src/core/unityDiscovery.js';
+import { createDiscoveryReport, formatDiscoveryReport, redactDiscoveryReport } from '../src/core/unityDiscovery.js';
 
 const command = process.argv[2];
 
@@ -12,7 +12,7 @@ if (command === 'doctor' || command === 'list-instances') {
   });
 
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(redactDiscoveryReport(report), null, 2));
   } else {
     console.log(formatDiscoveryReport(report));
   }

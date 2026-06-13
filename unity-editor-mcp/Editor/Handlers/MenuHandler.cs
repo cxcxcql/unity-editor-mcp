@@ -60,6 +60,15 @@ namespace UnityEditorMCP.Handlers
                 bool safetyCheck = parameters["safetyCheck"]?.ToObject<bool>() ?? true;
                 JObject menuParameters = parameters["parameters"] as JObject;
 
+                if (!safetyCheck && !AllowUnsafeMenuOverride())
+                {
+                    return new
+                    {
+                        success = false,
+                        error = "safetyCheck: false requires UNITY_MCP_ALLOW_UNSAFE_MENU=1 in the Unity Editor environment"
+                    };
+                }
+
                 // Validate menu path
                 if (string.IsNullOrWhiteSpace(menuPath))
                 {
@@ -121,7 +130,7 @@ namespace UnityEditorMCP.Handlers
                     return new
                     {
                         success = false,
-                        error = $"Menu item is blacklisted for safety: {menuPath}. Use safetyCheck: false to override."
+                        error = $"Menu item is blacklisted for safety: {menuPath}. Set UNITY_MCP_ALLOW_UNSAFE_MENU=1 before using safetyCheck: false."
                     };
                 }
 
@@ -321,6 +330,13 @@ namespace UnityEditorMCP.Handlers
                 return removed;
             }
             return false;
+        }
+
+        private static bool AllowUnsafeMenuOverride()
+        {
+            var value = Environment.GetEnvironmentVariable("UNITY_MCP_ALLOW_UNSAFE_MENU");
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

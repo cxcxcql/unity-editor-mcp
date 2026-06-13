@@ -3,13 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { 
-  ListToolsRequestSchema, 
-  CallToolRequestSchema,
-  ListResourcesRequestSchema,
-  ListPromptsRequestSchema
-} from '@modelcontextprotocol/sdk/types.js';
 import { UnityConnection } from './unityConnection.js';
+import { registerMcpHandlers } from './mcpRegistration.js';
 import { createHandlers } from '../handlers/index.js';
 import { config, logger } from './config.js';
 
@@ -27,117 +22,12 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {},
-      resources: {},
-      prompts: {}
+      tools: {}
     }
   }
 );
 
-// Register MCP protocol handlers
-// Note: Do not log here as it breaks MCP protocol initialization
-
-// Handle tool listing
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const tools = Array.from(handlers.values()).map(handler => handler.getDefinition());
-  return { tools };
-});
-
-// Handle resources listing
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  logger.debug('[MCP] Received resources/list request');
-  // Unity MCP server doesn't provide resources
-  return { resources: [] };
-});
-
-// Handle prompts listing
-server.setRequestHandler(ListPromptsRequestSchema, async () => {
-  logger.debug('[MCP] Received prompts/list request');
-  // Unity MCP server doesn't provide prompts
-  return { prompts: [] };
-});
-
-// Handle tool execution
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  const requestTime = Date.now();
-  
-  logger.info(`[MCP] Received tool call request: ${name} at ${new Date(requestTime).toISOString()}`, { args });
-  
-  const handler = handlers.get(name);
-  if (!handler) {
-    logger.error(`[MCP] Tool not found: ${name}`);
-    throw new Error(`Tool not found: ${name}`);
-  }
-  
-  try {
-    logger.info(`[MCP] Starting handler execution for: ${name} at ${new Date().toISOString()}`);
-    const startTime = Date.now();
-    
-    // Handler returns response in our format
-    const result = await handler.handle(args);
-    
-    const duration = Date.now() - startTime;
-    const totalDuration = Date.now() - requestTime;
-    logger.info(`[MCP] Handler completed at ${new Date().toISOString()}: ${name}`, { 
-      handlerDuration: `${duration}ms`,
-      totalDuration: `${totalDuration}ms`,
-      status: result.status 
-    });
-    
-    // Convert to MCP format
-    if (result.status === 'error') {
-      logger.error(`[MCP] Handler returned error: ${name}`, { error: result.error, code: result.code });
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error: ${result.error}\nCode: ${result.code || 'UNKNOWN_ERROR'}${result.details ? '\nDetails: ' + JSON.stringify(result.details, null, 2) : ''}`
-          }
-        ]
-      };
-    }
-    
-    // Success response
-    logger.info(`[MCP] Returning success response for: ${name} at ${new Date().toISOString()}`);
-    
-    // Handle undefined or null results from handlers
-    let responseText;
-    if (result.result === undefined || result.result === null) {
-      responseText = JSON.stringify({
-        status: 'success',
-        message: 'Operation completed successfully but no details were returned',
-        tool: name
-      }, null, 2);
-    } else {
-      responseText = JSON.stringify(result.result, null, 2);
-    }
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: responseText
-        }
-      ]
-    };
-  } catch (error) {
-    const errorTime = Date.now();
-    logger.error(`[MCP] Handler threw exception at ${new Date(errorTime).toISOString()}: ${name}`, { 
-      error: error.message, 
-      stack: error.stack,
-      duration: `${errorTime - requestTime}ms`
-    });
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Error: ${error.message}`
-        }
-      ]
-    };
-  }
-});
+registerMcpHandlers(server, handlers, { logger });
 
 // Handle connection events
 unityConnection.on('connected', () => {
@@ -206,41 +96,12 @@ export async function createServer(customConfig = config) {
     },
     {
       capabilities: {
-        tools: {},
-        resources: {},
-        prompts: {}
+        tools: {}
       }
     }
   );
   
-  // Register handlers for test server
-  testServer.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = Array.from(testHandlers.values()).map(handler => handler.getDefinition());
-    return { tools };
-  });
-  
-  testServer.setRequestHandler(ListResourcesRequestSchema, async () => {
-    return { resources: [] };
-  });
-  
-  testServer.setRequestHandler(ListPromptsRequestSchema, async () => {
-    return { prompts: [] };
-  });
-  
-  testServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    
-    const handler = testHandlers.get(name);
-    if (!handler) {
-      return {
-        status: 'error',
-        error: `Tool not found: ${name}`,
-        code: 'TOOL_NOT_FOUND'
-      };
-    }
-    
-    return await handler.handle(args);
-  });
+  registerMcpHandlers(testServer, testHandlers, { logger });
   
   return {
     server: testServer,
