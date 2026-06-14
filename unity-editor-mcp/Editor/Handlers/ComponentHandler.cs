@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEditor;
+using UnityEditor.Events;
 using Newtonsoft.Json.Linq;
 
 namespace UnityEditorMCP.Handlers
@@ -408,22 +410,41 @@ namespace UnityEditorMCP.Handlers
 
                 Type type = component.GetType();
                 
-                // Try field first
+                // Resolve the target member: public field first (preserves existing precedence),
+                // then public property, then a non-public [SerializeField] field (e.g. private Image fillBar).
                 FieldInfo field = type.GetField(propertyName, BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo property = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+                if (field == null && property == null)
+                {
+                    var serializedField = type.GetField(propertyName, BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (serializedField != null && serializedField.IsDefined(typeof(SerializeField), true))
+                    {
+                        field = serializedField;
+                    }
+                }
+
                 if (field != null)
                 {
-                    object convertedValue = ConvertValue(value, field.FieldType);
-                    field.SetValue(component, convertedValue);
+                    if (typeof(UnityEventBase).IsAssignableFrom(field.FieldType))
+                    {
+                        return SetUnityEvent(component, field.GetValue(component) as UnityEventBase, value);
+                    }
+                    field.SetValue(component, ConvertValue(value, field.FieldType));
                     return true;
                 }
 
-                // Try property
-                PropertyInfo property = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
-                if (property != null && property.CanWrite)
+                if (property != null)
                 {
-                    object convertedValue = ConvertValue(value, property.PropertyType);
-                    property.SetValue(component, convertedValue);
-                    return true;
+                    // UnityEvents (e.g. Button.onClick) are usually get-only properties — handle before CanWrite.
+                    if (typeof(UnityEventBase).IsAssignableFrom(property.PropertyType))
+                    {
+                        return SetUnityEvent(component, property.GetValue(component) as UnityEventBase, value);
+                    }
+                    if (property.CanWrite)
+                    {
+                        property.SetValue(component, ConvertValue(value, property.PropertyType));
+                        return true;
+                    }
                 }
 
                 // Handle nested properties (e.g., "constraints.freezePositionX")
@@ -583,6 +604,12 @@ namespace UnityEditorMCP.Handlers
                 return Enum.Parse(targetType, value.ToString(), true);
             }
 
+            // Unity object references (Sprite, GameObject, Component, Material, Texture, ...)
+            if (typeof(UnityEngine.Object).IsAssignableFrom(targetType))
+            {
+                return ResolveObjectReference(value, targetType);
+            }
+
             // Use JSON.NET for other conversions
             try
             {
@@ -592,6 +619,177 @@ namespace UnityEditorMCP.Handlers
             {
                 // Fallback to basic conversion
                 return Convert.ChangeType(value.ToString(), targetType);
+            }
+        }
+
+        /// <summary>
+        /// Resolves a JSON value into a UnityEngine.Object reference (asset or scene object).
+        /// Accepts a string (asset path "Assets/..."/"Packages/...", a scene path "/Canvas/Btn" or a
+        /// plain name, or a 32-char asset GUID), an object
+        /// ({ assetPath|path [, subAsset|name] } | { guid } | { scenePath|find } | { instanceID }),
+        /// or null to clear. The result is coerced to targetType (GameObject &lt;-&gt; Component as needed).
+        /// </summary>
+        public static UnityEngine.Object ResolveObjectReference(JToken value, Type targetType)
+        {
+            if (value == null || value.Type == JTokenType.Null)
+                return null;
+
+            string assetPath = null, subAsset = null, scenePath = null;
+            int? instanceID = null;
+
+            if (value.Type == JTokenType.String)
+            {
+                string s = value.ToString();
+                if (string.IsNullOrEmpty(s)) return null;
+                if (s.StartsWith("Assets/") || s.StartsWith("Packages/")) assetPath = s;
+                else if (s.StartsWith("/")) scenePath = s;
+                else if (IsAssetGuid(s)) assetPath = AssetDatabase.GUIDToAssetPath(s);
+                else scenePath = s; // treat as a scene object name
+            }
+            else if (value.Type == JTokenType.Integer)
+            {
+                instanceID = value.ToObject<int>();
+            }
+            else if (value is JObject o)
+            {
+                assetPath = o["assetPath"]?.ToString() ?? o["path"]?.ToString();
+                subAsset = o["subAsset"]?.ToString() ?? o["name"]?.ToString();
+                scenePath = o["scenePath"]?.ToString() ?? o["find"]?.ToString();
+                var guid = o["guid"]?.ToString();
+                if (string.IsNullOrEmpty(assetPath) && !string.IsNullOrEmpty(guid))
+                    assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (o["instanceID"] != null) instanceID = o["instanceID"].ToObject<int>();
+            }
+
+            UnityEngine.Object resolved = null;
+            if (instanceID.HasValue)
+                resolved = EditorUtility.InstanceIDToObject(instanceID.Value);
+            else if (!string.IsNullOrEmpty(assetPath))
+                resolved = LoadAssetAs(assetPath, targetType, subAsset);
+            else if (!string.IsNullOrEmpty(scenePath))
+                resolved = GameObject.Find(scenePath);
+
+            return CoerceToType(resolved, targetType);
+        }
+
+        private static UnityEngine.Object LoadAssetAs(string assetPath, Type targetType, string subAsset)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return null;
+            // Components live on a GameObject/prefab; load the GameObject and GetComponent later.
+            Type loadType = typeof(Component).IsAssignableFrom(targetType) ? typeof(GameObject) : targetType;
+
+            if (!string.IsNullOrEmpty(subAsset))
+            {
+                foreach (var a in AssetDatabase.LoadAllAssetRepresentationsAtPath(assetPath))
+                    if (a != null && a.name == subAsset && loadType.IsInstanceOfType(a)) return a;
+                foreach (var a in AssetDatabase.LoadAllAssetsAtPath(assetPath))
+                    if (a != null && a.name == subAsset && loadType.IsInstanceOfType(a)) return a;
+            }
+
+            var direct = AssetDatabase.LoadAssetAtPath(assetPath, loadType);
+            if (direct != null) return direct;
+
+            // Fallback: a representation/sub-asset of the wanted type (e.g. a Sprite under a Texture).
+            foreach (var a in AssetDatabase.LoadAllAssetRepresentationsAtPath(assetPath))
+                if (a != null && loadType.IsInstanceOfType(a)) return a;
+            foreach (var a in AssetDatabase.LoadAllAssetsAtPath(assetPath))
+                if (a != null && loadType.IsInstanceOfType(a)) return a;
+            return null;
+        }
+
+        private static UnityEngine.Object CoerceToType(UnityEngine.Object obj, Type targetType)
+        {
+            if (obj == null) return null;
+            if (targetType.IsInstanceOfType(obj)) return obj;
+            if (typeof(Component).IsAssignableFrom(targetType) && obj is GameObject go)
+                return go.GetComponent(targetType);
+            if (targetType == typeof(GameObject) && obj is Component comp)
+                return comp.gameObject;
+            return null;
+        }
+
+        private static bool IsAssetGuid(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length != 32) return false;
+            foreach (char c in s) if (!Uri.IsHexDigit(c)) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// Sets the persistent listeners on a UnityEvent (e.g. Button.onClick). Existing persistent
+        /// calls are replaced. Value: { "persistentCalls": [ { "target": &lt;object-ref&gt;,
+        /// "method": "SetActive", "argument": true } ] } (or a bare array). Supports no-arg UnityEvents
+        /// with void / bool / int / float / string baked arguments.
+        /// </summary>
+        private static bool SetUnityEvent(Component component, UnityEventBase evt, JToken value)
+        {
+            if (evt == null) return false;
+
+            // Replace existing persistent listeners.
+            for (int i = evt.GetPersistentEventCount() - 1; i >= 0; i--)
+                UnityEventTools.RemovePersistentListener(evt, i);
+
+            JArray calls = (value as JObject)?["persistentCalls"] as JArray ?? value as JArray;
+            if (calls != null)
+            {
+                foreach (var item in calls.OfType<JObject>())
+                {
+                    var target = ResolveObjectReference(item["target"], typeof(UnityEngine.Object));
+                    string method = item["method"]?.ToString();
+                    if (target == null || string.IsNullOrEmpty(method)) continue;
+                    AddPersistentCall(evt, target, method, item["argument"] ?? item["arg"]);
+                }
+            }
+
+            EditorUtility.SetDirty(component);
+            return true;
+        }
+
+        private static void AddPersistentCall(UnityEventBase evt, UnityEngine.Object target, string method, JToken arg)
+        {
+            if (!(evt is UnityEvent voidEvent))
+            {
+                Debug.LogWarning($"[ComponentHandler] Only no-argument UnityEvents (e.g. Button.onClick) are supported for wiring; got {evt.GetType().Name}.");
+                return;
+            }
+
+            Type t = target.GetType();
+            try
+            {
+                if (arg == null || arg.Type == JTokenType.Null)
+                {
+                    var mi = t.GetMethod(method, Type.EmptyTypes);
+                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}() not found"); return; }
+                    UnityEventTools.AddVoidPersistentListener(voidEvent, (UnityAction)Delegate.CreateDelegate(typeof(UnityAction), target, mi));
+                }
+                else if (arg.Type == JTokenType.Boolean)
+                {
+                    var mi = t.GetMethod(method, new[] { typeof(bool) });
+                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(bool) not found"); return; }
+                    UnityEventTools.AddBoolPersistentListener(voidEvent, (UnityAction<bool>)Delegate.CreateDelegate(typeof(UnityAction<bool>), target, mi), arg.ToObject<bool>());
+                }
+                else if (arg.Type == JTokenType.Integer)
+                {
+                    var mi = t.GetMethod(method, new[] { typeof(int) });
+                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(int) not found"); return; }
+                    UnityEventTools.AddIntPersistentListener(voidEvent, (UnityAction<int>)Delegate.CreateDelegate(typeof(UnityAction<int>), target, mi), arg.ToObject<int>());
+                }
+                else if (arg.Type == JTokenType.Float)
+                {
+                    var mi = t.GetMethod(method, new[] { typeof(float) });
+                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(float) not found"); return; }
+                    UnityEventTools.AddFloatPersistentListener(voidEvent, (UnityAction<float>)Delegate.CreateDelegate(typeof(UnityAction<float>), target, mi), arg.ToObject<float>());
+                }
+                else
+                {
+                    var mi = t.GetMethod(method, new[] { typeof(string) });
+                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(string) not found"); return; }
+                    UnityEventTools.AddStringPersistentListener(voidEvent, (UnityAction<string>)Delegate.CreateDelegate(typeof(UnityAction<string>), target, mi), arg.ToObject<string>());
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ComponentHandler] Failed to wire {t.Name}.{method}: {ex.Message}");
             }
         }
 

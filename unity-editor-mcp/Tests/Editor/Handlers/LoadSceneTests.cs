@@ -69,7 +69,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.LoadScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.AreEqual("LoadTestScene", result.sceneName);
             Assert.AreEqual(testScenePath, result.scenePath);
             Assert.AreEqual("Single", result.loadMode);
@@ -91,7 +91,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.LoadScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.AreEqual("LoadTestScene", result.sceneName);
             Assert.IsTrue(result.isLoaded);
         }
@@ -113,7 +113,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.LoadScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.AreEqual("AdditiveTestScene", result.sceneName);
             Assert.AreEqual("Additive", result.loadMode);
             Assert.IsTrue(result.isLoaded);
@@ -222,7 +222,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.LoadScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.AreEqual(previousSceneName, result.previousScene);
         }
     }

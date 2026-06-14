@@ -396,7 +396,57 @@ namespace UnityEditorMCP.Handlers
 
         private static bool SimulateClick(GameObject target, string clickType, float holdDuration)
         {
-            // Find button component
+            // Drive a REAL EventSystem pointer event (enter -> down -> up -> click) so every
+            // handler runs exactly as for a user tap: IPointerClickHandler, EventTrigger, the
+            // Selectable/Button state machine and EventSystem selection. A bare
+            // button.onClick.Invoke() skips all of that and silently does nothing for UIs whose
+            // logic isn't wired directly to Button.onClick.
+            var eventSystem = EventSystem.current;
+            var pointerData = new PointerEventData(eventSystem)
+            {
+                button = ParsePointerButton(clickType)
+            };
+
+            // Pointer position from the element's RectTransform, used as the pointer position so
+            // handlers that read it behave correctly. We dispatch to the element directly (below),
+            // so this does not need to drive a raycast.
+            var rect = target.GetComponent<RectTransform>();
+            if (rect != null)
+            {
+                var corners = new Vector3[4];
+                rect.GetWorldCorners(corners);
+                Vector3 worldCenter = (corners[0] + corners[2]) * 0.5f;
+                pointerData.position = RectTransformUtility.WorldToScreenPoint(GetEventCamera(target), worldCenter);
+            }
+            else
+            {
+                pointerData.position = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+            }
+            pointerData.pressPosition = pointerData.position;
+
+            // Dispatch the full pointer sequence DIRECTLY to the requested element (bubbling to its
+            // nearest handler) so we click exactly what the caller named — not whatever a raycast
+            // lands on (an overlay/occluder, or a mis-projected point on a non-overlay canvas).
+            ExecuteEvents.Execute(target, pointerData, ExecuteEvents.pointerEnterHandler);
+            var pressHandler = ExecuteEvents.ExecuteHierarchy(target, pointerData, ExecuteEvents.pointerDownHandler);
+            var clickHandler = ExecuteEvents.GetEventHandler<IPointerClickHandler>(target);
+            pointerData.pointerPress = pressHandler ?? clickHandler;
+            pointerData.rawPointerPress = target;
+            if (eventSystem != null)
+            {
+                var selectHandler = ExecuteEvents.GetEventHandler<ISelectHandler>(target);
+                if (selectHandler != null)
+                    eventSystem.SetSelectedGameObject(selectHandler, pointerData);
+            }
+            ExecuteEvents.Execute(pressHandler ?? target, pointerData, ExecuteEvents.pointerUpHandler);
+            var clicked = ExecuteEvents.ExecuteHierarchy(target, pointerData, ExecuteEvents.pointerClickHandler);
+            ExecuteEvents.Execute(target, pointerData, ExecuteEvents.pointerExitHandler);
+
+            if (clicked != null)
+                return true;
+
+            // Fallback: nothing consumed the pointer click (no EventSystem / no GraphicRaycaster /
+            // off-screen element). Fire the component handlers directly so the bridge still acts.
             var button = target.GetComponent<Button>();
             if (button != null && button.interactable)
             {
@@ -404,7 +454,6 @@ namespace UnityEditorMCP.Handlers
                 return true;
             }
 
-            // Find toggle component
             var toggle = target.GetComponent<Toggle>();
             if (toggle != null && toggle.interactable)
             {
@@ -412,7 +461,6 @@ namespace UnityEditorMCP.Handlers
                 return true;
             }
 
-            // Find dropdown component
             var dropdown = target.GetComponent<Dropdown>();
             if (dropdown != null && dropdown.interactable)
             {
@@ -420,16 +468,40 @@ namespace UnityEditorMCP.Handlers
                 return true;
             }
 
-            // For other selectables, try to invoke submit event
             var selectable = target.GetComponent<Selectable>();
             if (selectable != null && selectable.interactable)
             {
-                var pointer = new PointerEventData(EventSystem.current);
-                ExecuteEvents.Execute(target, pointer, ExecuteEvents.submitHandler);
+                ExecuteEvents.Execute(target, pointerData, ExecuteEvents.submitHandler);
                 return true;
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Maps a click-type string ("left"/"right"/"middle") to an EventSystems pointer button.
+        /// </summary>
+        private static PointerEventData.InputButton ParsePointerButton(string clickType)
+        {
+            switch ((clickType ?? "left").ToLowerInvariant())
+            {
+                case "right": return PointerEventData.InputButton.Right;
+                case "middle": return PointerEventData.InputButton.Middle;
+                default: return PointerEventData.InputButton.Left;
+            }
+        }
+
+        /// <summary>
+        /// Returns the camera to use for pointer math / raycasting on a UI element,
+        /// or null for Screen Space - Overlay canvases.
+        /// </summary>
+        private static Camera GetEventCamera(GameObject target)
+        {
+            var canvas = target.GetComponentInParent<Canvas>();
+            if (canvas == null) return null;
+            var root = canvas.rootCanvas != null ? canvas.rootCanvas : canvas;
+            if (root.renderMode == RenderMode.ScreenSpaceOverlay) return null;
+            return root.worldCamera != null ? root.worldCamera : Camera.main;
         }
 
         private static object GetElementState(GameObject target, bool includeChildren, bool includeInteractableInfo)

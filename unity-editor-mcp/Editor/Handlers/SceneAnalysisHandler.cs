@@ -368,18 +368,49 @@ namespace UnityEditorMCP.Handlers
         {
             switch (value)
             {
-                case Vector3 v:
-                    return SerializeVector3(v);
-                case Vector2 v:
-                    return new { x = v.x, y = v.y };
-                case Color c:
-                    return SerializeColor(c);
+                case null:
+                    return null;
+                case string s:
+                    return s;
+                case Vector2 v2:
+                    return new { x = v2.x, y = v2.y };
+                case Vector3 v3:
+                    return SerializeVector3(v3);
+                case Vector4 v4:
+                    return new { x = v4.x, y = v4.y, z = v4.z, w = v4.w };
                 case Quaternion q:
                     return new { x = q.x, y = q.y, z = q.z, w = q.w };
+                case Color c:
+                    return SerializeColor(c);
+                case Color32 c32:
+                    return new { r = (int)c32.r, g = (int)c32.g, b = (int)c32.b, a = (int)c32.a };
+                case Rect r:
+                    return new { x = r.x, y = r.y, width = r.width, height = r.height };
+                case Bounds b:
+                    return new { center = SerializeVector3(b.center), size = SerializeVector3(b.size) };
                 case Enum e:
                     return e.ToString();
+                case UnityEngine.UI.ColorBlock cb:
+                    return new
+                    {
+                        normalColor = SerializeColor(cb.normalColor),
+                        highlightedColor = SerializeColor(cb.highlightedColor),
+                        pressedColor = SerializeColor(cb.pressedColor),
+                        selectedColor = SerializeColor(cb.selectedColor),
+                        disabledColor = SerializeColor(cb.disabledColor),
+                        colorMultiplier = cb.colorMultiplier,
+                        fadeDuration = cb.fadeDuration
+                    };
+                case UnityEngine.Object obj:
+                    // Never recurse into Unity objects (Sprite, Material, Transform, ...): they expose
+                    // self-referencing properties (e.g. Color.linear) that crash JSON serialization with
+                    // a reference loop. Emit a lightweight descriptor instead.
+                    return new { name = obj != null ? obj.name : null, type = value.GetType().Name, instanceID = obj != null ? obj.GetInstanceID() : 0 };
                 default:
-                    return value;
+                    // Primitives (int/float/bool/...) serialize directly. Any other struct/class is
+                    // returned as a string so it can never trigger a Newtonsoft reference loop
+                    // (e.g. ColorBlock/Color.linear, the bug this guards against).
+                    return value.GetType().IsPrimitive ? value : value.ToString();
             }
         }
 

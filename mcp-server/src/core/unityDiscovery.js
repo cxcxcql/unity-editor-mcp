@@ -295,7 +295,10 @@ export async function resolveUnityEndpoint(options = {}) {
   }
 
   const portProbe = options.canConnectToPort || canConnectToPort;
-  const cachedEndpoint = await getConnectableCachedEndpoint(options.lastEndpoint, portProbe);
+  const cachedEndpoint = await getConnectableCachedEndpoint(options.lastEndpoint, portProbe, {
+    registryDir: discoveryConfig.registryDir,
+    staleAfterMs: discoveryConfig.staleAfterMs
+  });
   if (cachedEndpoint) {
     return cachedEndpoint;
   }
@@ -473,7 +476,7 @@ export function formatInstanceCandidates(instances) {
   ].join('\n');
 }
 
-async function getConnectableCachedEndpoint(endpoint, canConnect) {
+async function getConnectableCachedEndpoint(endpoint, canConnect, registryOptions = {}) {
   if (!endpoint?.instance?.pid || !endpoint.port || !isProcessAlive(endpoint.instance.pid)) {
     return null;
   }
@@ -483,9 +486,23 @@ async function getConnectableCachedEndpoint(endpoint, canConnect) {
     return null;
   }
 
+  // Refresh the auth token from the registry before reusing the cached endpoint.
+  // A Unity domain reload (entering/exiting play mode, a recompile) regenerates the
+  // per-session auth token while keeping the same pid and port, so the cached token
+  // goes stale even though the port is still connectable — which would otherwise yield
+  // AUTH_FAILED on every command until the bridge is manually restarted.
+  let { instance, authToken } = endpoint;
+  const fresh = await findRegistryEndpointByPort(host, endpoint.port, registryOptions);
+  if (fresh && fresh.pid === endpoint.instance.pid) {
+    instance = fresh;
+    authToken = fresh.authToken ?? authToken;
+  }
+
   return {
     ...endpoint,
     host,
+    instance,
+    authToken,
     source: 'cached-endpoint'
   };
 }

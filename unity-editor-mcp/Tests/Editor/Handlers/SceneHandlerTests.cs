@@ -51,7 +51,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.CreateScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.AreEqual("TestScene", result.sceneName);
             Assert.AreEqual("Assets/Scenes/TestScene.unity", result.path);
             Assert.IsTrue(result.isLoaded);
@@ -75,7 +75,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.CreateScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.AreEqual("CustomScene", result.sceneName);
             Assert.AreEqual(testSceneFolder + "/CustomScene.unity", result.path);
             
@@ -98,7 +98,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.CreateScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.IsFalse(result.isLoaded);
             
             // Verify current scene didn't change
@@ -118,7 +118,7 @@ namespace UnityEditorMCP.Tests
             var result = SceneHandler.CreateScene(parameters) as dynamic;
 
             Assert.IsNotNull(result);
-            Assert.IsNull(result.error);
+            Assert.IsFalse(JObject.FromObject((object)result).ContainsKey("error"));
             Assert.IsTrue(result.sceneIndex >= 0);
             
             // Verify scene is in build settings

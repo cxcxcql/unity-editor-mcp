@@ -321,6 +321,40 @@ describe('Unity discovery', () => {
     assert.equal(endpoint.source, 'cached-endpoint');
   });
 
+  it('refreshes the auth token from the registry when reusing a cached endpoint', async () => {
+    // A Unity domain reload (play-mode toggle / recompile) keeps the same pid+port but
+    // regenerates the auth token. The cached-endpoint fast path must pick up the fresh token.
+    await writeInstance('reloaded.json', {
+      instanceId: 'unity-reloaded',
+      projectPath: path.join(tempDir, 'ReloadedProject'),
+      pid: process.pid,
+      port: 50123,
+      authToken: 'fresh-token',
+      lastSeen: new Date().toISOString()
+    });
+
+    const endpoint = await resolveUnityEndpoint({
+      unityConfig: {
+        host: 'localhost',
+        port: 6400,
+        hasExplicitPort: false,
+        discovery: { registryDir, enabled: true }
+      },
+      lastEndpoint: {
+        host: '127.0.0.1',
+        port: 50123,
+        source: 'discovery',
+        authToken: 'stale-token',
+        instance: { pid: process.pid, host: '127.0.0.1', port: 50123, authToken: 'stale-token' }
+      },
+      canConnectToPort: async (host, port) => host === '127.0.0.1' && port === 50123,
+      cwd: tempDir
+    });
+
+    assert.equal(endpoint.source, 'cached-endpoint');
+    assert.equal(endpoint.authToken, 'fresh-token', 'cached endpoint must refresh its auth token after a Unity reload');
+  });
+
   it('uses a stale exact project match during reload when its port is connectable', async () => {
     const projectPath = path.join(tempDir, 'ReloadingProject');
     await writeInstance('reloading.json', {
