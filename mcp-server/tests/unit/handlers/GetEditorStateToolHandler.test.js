@@ -44,7 +44,7 @@ describe('GetEditorStateToolHandler', () => {
       const result = await handler.execute({});
       
       assert.equal(mockConnection.sendCommand.mock.calls.length, 1);
-      assert.deepEqual(mockConnection.sendCommand.mock.calls[0].arguments, ['get_editor_state', {}]);
+      assert.deepEqual(mockConnection.sendCommand.mock.calls[0].arguments, ['get_editor_state', {}, { timeoutMs: 1000 }]);
       
       assert.ok(result);
       assert.ok(result.state);

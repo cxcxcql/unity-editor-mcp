@@ -1,14 +1,17 @@
 export const PLAY_RECOVERY_TIMEOUT_MS = 15000;
 export const STOP_TRANSITION_TIMEOUT_MS = 10000;
 export const PLAY_MODE_POLL_INTERVAL_MS = 250;
+export const PLAY_MODE_STATE_COMMAND_TIMEOUT_MS = 1000;
 
 export function isRecoverablePlayModeDisconnect(error) {
   return error?.message === 'Connection closed' ||
     error?.message === 'Connection timeout' ||
+    error?.message === 'Command timeout' ||
     error?.message === 'Not connected to Unity' ||
     error?.message === 'Unity connection not available' ||
     error?.code === 'ECONNRESET' ||
     error?.code === 'EPIPE' ||
+    error?.code === 'COMMAND_TIMEOUT' ||
     error?.code === 'NOT_CONNECTED' ||
     error?.code === 'CONNECTION_CLOSED' ||
     error?.code === 'NO_UNITY_INSTANCE' ||
@@ -22,6 +25,7 @@ export async function recoverPlayModeState(unityConnection, message, options = {
     {
       timeoutMs: options.timeoutMs ?? PLAY_RECOVERY_TIMEOUT_MS,
       pollIntervalMs: options.pollIntervalMs ?? PLAY_MODE_POLL_INTERVAL_MS,
+      commandTimeoutMs: options.commandTimeoutMs,
       timeoutCode: 'PLAY_MODE_RECOVERY_TIMEOUT',
       timeoutMessage: 'Timed out waiting for Unity to enter play mode after reconnect',
       connectBeforeFirstPoll: true
@@ -72,7 +76,13 @@ export async function waitForEditorState(unityConnection, predicate, options = {
 
     try {
       attempts++;
-      const result = await unityConnection.sendCommand('get_editor_state', {});
+      const result = await unityConnection.sendCommand('get_editor_state', {}, {
+        timeoutMs: getStatePollCommandTimeoutMs({
+          startedAt,
+          timeoutMs,
+          commandTimeoutMs: options.commandTimeoutMs
+        })
+      });
       if (result?.status === 'error') {
         const error = new Error(result.error || 'Failed to get Unity editor state');
         error.code = 'UNITY_ERROR';
@@ -115,6 +125,13 @@ export async function pollEditorState(unityConnection, predicate, options = {}) 
 
 export function extractState(result) {
   return result?.state || result || {};
+}
+
+function getStatePollCommandTimeoutMs({ startedAt, timeoutMs, commandTimeoutMs }) {
+  const elapsedMs = Date.now() - startedAt;
+  const remainingMs = Math.max(1, timeoutMs - elapsedMs);
+  const requestedMs = commandTimeoutMs ?? PLAY_MODE_STATE_COMMAND_TIMEOUT_MS;
+  return Math.max(1, Math.min(requestedMs, remainingMs));
 }
 
 function createStateTimeoutError(code, message, details) {

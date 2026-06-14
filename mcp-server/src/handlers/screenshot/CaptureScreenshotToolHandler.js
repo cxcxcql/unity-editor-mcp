@@ -1,5 +1,7 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
 
+const SCREENSHOT_COMMAND_TIMEOUT_MS = 90000;
+
 /**
  * Handler for capturing screenshots from Unity Editor
  */
@@ -118,7 +120,9 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
     });
 
     // Send capture command to Unity
-    const response = await this.unityConnection.sendCommand('capture_screenshot', params);
+    const response = await this.unityConnection.sendCommand('capture_screenshot', params, {
+      timeoutMs: SCREENSHOT_COMMAND_TIMEOUT_MS
+    });
 
     // Handle Unity response
     if (response.error) {

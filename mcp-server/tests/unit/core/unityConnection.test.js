@@ -14,6 +14,7 @@ describe('UnityConnection', () => {
         host: 'localhost',
         port: 6400,
         hasExplicitPort: true,
+        autoReconnect: false,
         reconnectDelay: 10,
         maxReconnectDelay: 100,
         reconnectBackoffMultiplier: 2,
@@ -24,15 +25,16 @@ describe('UnityConnection', () => {
       }
     };
     mockSocket = new EventEmitter();
+    const socket = mockSocket;
     mockSocket.write = mock.fn((data, callback) => {
       if (callback) callback();
     });
     mockSocket.destroy = mock.fn(() => {
       // Simulate what a real socket does - emit close event
       setImmediate(() => {
-        if (!mockSocket.destroyed) {
-          mockSocket.destroyed = true;
-          mockSocket.emit('close');
+        if (!socket.destroyed) {
+          socket.destroyed = true;
+          socket.emit('close');
         }
       });
     });
@@ -235,26 +237,84 @@ describe('UnityConnection', () => {
     });
 
     it('should handle command timeout', async () => {
-      // Create a command that won't get a response
-      const sendPromise = connection.sendCommand('slow-command', {});
-      
-      // The command should be pending
+      const sendPromise = connection.sendCommand('slow-command', {}, { timeoutMs: 5 });
+
       assert.equal(connection.pendingCommands.size, 1);
-      
-      // Wait for natural timeout (config is 30s, but we'll simulate faster)
-      // Clear all pending commands to simulate timeout
-      for (const [id, pending] of connection.pendingCommands) {
-        pending.reject(new Error('Command timeout'));
-      }
-      connection.pendingCommands.clear();
-      
+
       await assert.rejects(
         sendPromise,
         /Command timeout/
       );
-      
-      // Verify pending command was cleaned up
+
       assert.equal(connection.pendingCommands.size, 0);
+      assert.equal(connection.connected, false);
+    });
+
+    it('should honor per-command timeout overrides', async () => {
+      mockSocket.destroy = mock.fn(() => {
+        mockSocket.destroyed = true;
+      });
+
+      let thrown;
+      try {
+        await connection.sendCommand('slow-command', {}, { timeoutMs: 5 });
+      } catch (error) {
+        thrown = error;
+      }
+
+      assert.equal(thrown?.message, 'Command timeout');
+      assert.equal(thrown?.code, 'COMMAND_TIMEOUT');
+      assert.equal(thrown?.details?.timeoutMs, 5);
+    });
+
+    it('should reject queued commands without writing them when the active command times out or closes', async () => {
+      mockSocket.destroy = mock.fn(() => {
+        mockSocket.destroyed = true;
+      });
+      const firstPromise = connection.sendCommand('capture_screenshot', {}, { timeoutMs: 5 });
+      const secondPromise = connection.sendCommand('list_components', { gameObjectPath: '/Player' });
+
+      await assert.rejects(firstPromise, /Command timeout|Connection closed/);
+      await assert.rejects(
+        Promise.race([
+          secondPromise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('queued command remained pending')), 30))
+        ]),
+        /Connection closed/
+      );
+
+      assert.equal(mockSocket.write.mock.calls.length, 1, 'queued command should not be written on a timed-out socket');
+      assert.equal(connection.connected, false);
+      assert.equal(connection.socket, null);
+      assert.equal(connection.commandQueue.length, 0);
+    });
+
+    it('should detach the timed-out socket so late responses cannot poison framing state', async () => {
+      mockSocket.destroy = mock.fn(() => {
+        mockSocket.destroyed = true;
+      });
+      const timedOutSocket = mockSocket;
+      let unsolicitedMessage;
+      connection.on('message', (message) => {
+        unsolicitedMessage = message;
+      });
+
+      await assert.rejects(
+        connection.sendCommand('capture_screenshot', {}, { timeoutMs: 5 }),
+        /Command timeout/
+      );
+
+      assert.equal(timedOutSocket.listenerCount('data'), 0);
+      timedOutSocket.emit('data', frameMessage({
+        id: '1',
+        status: 'success',
+        result: { path: 'Assets/late-response.png' }
+      }));
+
+      assert.equal(unsolicitedMessage, undefined);
+      assert.equal(connection.messageBuffer.length, 0);
+      assert.equal(connection.pendingCommands.size, 0);
+      assert.equal(connection.socket, null);
     });
 
     it('should handle error responses', async () => {
@@ -361,17 +421,14 @@ describe('UnityConnection', () => {
     });
 
     it('should timeout if no pong received', async () => {
+      connection.config.unity.commandTimeout = 5;
       const pingPromise = connection.ping();
-
-      for (const [id, pending] of connection.pendingCommands) {
-        pending.reject(new Error('Command timeout'));
-        connection.pendingCommands.delete(id);
-      }
 
       await assert.rejects(
         pingPromise,
         /Command timeout/
       );
+      assert.equal(connection.pendingCommands.size, 0);
     });
   });
 

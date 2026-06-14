@@ -441,3 +441,111 @@ Manual retest checklist after committing, pushing, and refreshing the Unity pack
 3. Immediately call `get_editor_state`; confirm it reconnects if needed and returns the live Play Mode state.
 4. Call `execute_menu_item` for `Edit/Play`; confirm it returns `reasonCode: "USE_RECOMMENDED_TOOL"` and does not add Unity console errors about a missing `Edit/Play` menu.
 5. Trigger or inspect the port fallback warning; confirm enhanced logs classify it as `Warning`, not `Error`.
+
+## Retest After Main Update 4
+
+Retested: 2026-06-14
+MCP repo commit: `666ef0eaa8459e55ca38b16471af0deceb6e8f5b`
+Unity project package lock: `666ef0eaa8459e55ca38b16471af0deceb6e8f5b`
+Resolved package cache: `Library/PackageCache/com.unity.editor-mcp@2de6ad95343f`
+Reported Unity package version: `0.15.5`
+Reported MCP server from direct handler run: `unity-editor-mcp` `1.4.0`, `gitHead: 666ef0e`
+
+Setup:
+- Local MCP repo `/Users/ozan/Projects/unity-mcp` matched `origin/main` at `666ef0eaa8459e55ca38b16471af0deceb6e8f5b`.
+- The Bottomless Well lock file was updated from `cd062eb72e811704140ce2c8624b6c0da327da02` to `666ef0eaa8459e55ca38b16471af0deceb6e8f5b`.
+- Unity initially kept the old package cache `com.unity.editor-mcp@19643bb097dd`; after another package refresh it resolved to `com.unity.editor-mcp@2de6ad95343f`, which contains the new `USE_RECOMMENDED_TOOL` menu diagnostics code.
+- The Codex-hosted MCP tool process still reported old server metadata (`gitHead: cd062eb`, pid `54993`) after the repo pull. Terminating that process closed the Codex MCP transport; `tool_search` re-exposed the tool definitions, but calls still failed with `Transport closed`.
+- Because the Codex MCP transport did not recover in-session, live retests were run through the pulled repo's Node handler modules directly against the Unity TCP bridge from the Unity project cwd. This still exercised the updated Node code and the updated Unity package, but not the Codex MCP stdio host lifecycle.
+
+Automated checks:
+- Focused Node regression tests passed:
+  - `node --test tests/unit/handlers/PlayToolHandler.test.js tests/unit/handlers/GetEditorStateToolHandler.test.js tests/unit/handlers/StopToolHandler.test.js tests/unit/handlers/PauseToolHandler.test.js tests/unit/handlers/menu/ExecuteMenuItemToolHandler.test.js tests/unit/handlers/console/EnhancedReadLogsToolHandler.test.js`
+- Broad `npm test -- --runInBand` failed with 2 unit failures in `tests/unit/core/unityConnection.test.js`:
+  - `should share one in-flight connection attempt between concurrent callers` failed with `Connection timeout`.
+  - `should reject if the socket closes before connect completes` failed with `Missing expected rejection`.
+
+Status summary:
+
+1. Server/source metadata: fixed in direct handler run, but not in Codex MCP host after pull.
+   - Direct `list_unity_instances` and `ping` reported `gitHead: 666ef0e`.
+   - Codex MCP tools stayed bound to old pid `54993` and old `gitHead: cd062eb` until that process was killed; after that, this Codex session's MCP transport remained closed.
+
+2. Unity package refresh: fixed after cache turnover.
+   - The open Unity project eventually resolved `com.unity.editor-mcp@2de6ad95343f`.
+   - That cache contains `MenuHandler` support for `reasonCode: "USE_RECOMMENDED_TOOL"`.
+
+3. `play_game` command result: still not fixed.
+   - Focused live run from Edit Mode returned `PLAY_MODE_RECOVERY_TIMEOUT`: `Timed out waiting for Unity to enter play mode after reconnect`.
+   - Unity did enter Play Mode anyway.
+   - Follow-up `get_editor_state` succeeded and reported `isPlaying: true`.
+   - In both live runs, the first reconnect attempt during Play Mode reload saw transient `LOCAL_WORKSPACE_MISMATCH`, then a later reconnect found the new listener.
+   - The handler appears to miss the successful post-reconnect state before its recovery timeout expires.
+
+4. Immediate `get_editor_state`: improved.
+   - After `play_game` returned the timeout, `get_editor_state` successfully reconnected and returned Play Mode state.
+   - The first Play Mode state often reported `frameCount: 1`, `time: 0`, and `isPlayerLoopAdvancing: false`, even though the editor was in Play Mode.
+
+5. `stop_game` final-state polling: still returns the correct final state, but can be slow.
+   - Focused live run returned success with `isPlaying: false`, `polledUntilFinalState: true`, and `attempts: 1`.
+   - It took about 10 seconds in the focused run.
+
+6. `execute_menu_item` diagnostics: fixed.
+   - `execute_menu_item` for `Edit/Play` returned `reasonCode: "USE_RECOMMENDED_TOOL"`, `recommendedTool: "play_game"`, `executed: false`, and `executionTime: 0`.
+   - Follow-up `enhanced_read_logs` with warning/error/exception filters returned zero logs, so the previous missing-menu console error was not reproduced.
+
+7. Screenshot / late-response framing: new or still-open issue.
+   - `capture_screenshot` in Play Mode timed out after 30 seconds, but Unity later sent a success response and saved `Assets/_Project/Screenshots/mcp-game-tool-regression-666ef0e.png`.
+   - Because the pending command had already been rejected, the late response was logged as an unsolicited message.
+   - Subsequent queued component/log commands then timed out and the client logged invalid frame recovery errors such as `Invalid message length` and `Unable to recover from invalid frame, clearing buffer`.
+   - This suggests late responses after command timeout can desynchronize the framing buffer and poison later commands on the same socket.
+
+8. Parallel component reads: inconclusive in full live run due to screenshot-induced framing issue.
+   - `list_components` and `get_component_values` timed out after the screenshot timeout/late response sequence.
+   - This should be retested separately once the late-response/framing issue is fixed or with screenshot omitted.
+
+Cleanup:
+- The broad integration test created `/IntegrationTestCube`; it was deleted after the live retest and a follow-up find returned zero objects.
+- Unity was left in Edit Mode with `isPlaying: false`.
+
+Current remaining blockers from this retest:
+- Codex MCP host does not automatically reload/rebind after the old MCP server process is terminated; this blocked in-session tool use after refreshing the repo.
+- `play_game` still returns a failure (`PLAY_MODE_RECOVERY_TIMEOUT`) even though Unity enters Play Mode and subsequent state calls can see it.
+- Late responses after a command timeout can corrupt or desynchronize subsequent command framing.
+- Broad test suite has two failing `unityConnection` unit tests around concurrent connection lifecycle behavior.
+
+## Fix Iteration 5 Notes
+
+Root causes found after Retest After Main Update 4:
+- `play_game` recovery could spend the full recovery window inside a stuck `get_editor_state` command because the state-poll command inherited the normal Unity command timeout.
+- `capture_screenshot` can legitimately take longer than the default command timeout in Play Mode, so the Node server timed out first, kept using the same socket, and then treated Unity's late success response as unsolicited data.
+- After a command timeout, queued commands were still allowed to run on a socket whose pending response stream was no longer trustworthy.
+- `UnityConnection` tests disabled auto-reconnect through a process-wide environment variable, which leaked across parallel test files and broke retry tests.
+- The unit mock socket closed whatever object was in the shared `mockSocket` variable when its delayed `destroy()` callback fired, so a previous test could close the next test's fresh connection.
+
+Implementation target:
+- Add per-command timeout options to `UnityConnection.sendCommand`.
+- Bound Play Mode recovery `get_editor_state` polls to a short per-command timeout and retry `COMMAND_TIMEOUT` as a recoverable Play Mode handoff error.
+- Give `capture_screenshot` a longer command timeout (`90000ms`) so slow Unity screenshot capture does not trip the default command timeout.
+- Treat command timeout as a poisoned bridge state: reject the active command with `COMMAND_TIMEOUT`, close/destroy the socket, clear framing state, reject queued commands, and require a fresh connection for later work.
+- Replace the process-wide unit-test reconnect toggle with per-instance `autoReconnect: false` test config.
+- Fix the mock socket so delayed `destroy()` closes its own captured socket instance.
+
+Verification completed locally:
+- `node --test tests/unit/core/compilationWait.test.js tests/unit/core/unityConnection.retry.test.js tests/unit/core/unityConnection.test.js tests/unit/handlers/GetEditorStateToolHandler.test.js`
+- `node --test tests/unit/core/unityConnection.test.js tests/unit/handlers/CaptureScreenshotToolHandler.test.js tests/unit/handlers/PlayToolHandler.test.js`
+- `npm run test:unit`
+- `npm run test:ci`
+- `npm test -- --runInBand`
+- `git diff --check`
+
+Manual retest checklist after committing, pushing, refreshing the Unity package lock, and restarting the MCP client:
+1. Confirm `ping.structuredContent.server.gitHead` matches the next commit.
+2. Call `play_game` from Edit Mode and confirm it returns success with verified `state.isPlaying: true`.
+3. Immediately call `get_editor_state` and confirm it survives any listener handoff and returns Play Mode state.
+4. Call `capture_screenshot` in Play Mode and confirm it returns success without poisoning the socket.
+5. Immediately after the screenshot, run parallel component/log reads and confirm they execute sequentially on a healthy fresh or existing connection.
+6. Run `npm test -- --runInBand` from `mcp-server` and confirm the previous two `unityConnection` failures remain fixed.
+
+Known remaining non-code retest constraint:
+- Existing Codex MCP stdio processes still need a client/session restart to load the newly pushed server commit; this iteration adds source metadata and fixes server behavior, but it does not change Codex host process lifecycle.

@@ -40,9 +40,30 @@ describe('CaptureScreenshotToolHandler', () => {
       {
         captureMode: 'camera',
         outputPath: 'Assets/Screenshots/camera.png'
+      },
+      {
+        timeoutMs: 90000
       }
     ]);
     assert.equal(result.captureMode, 'camera');
     assert.equal(result.cameraName, 'Main Camera');
+  });
+
+  it('uses an extended timeout because Unity screenshots can complete after the default command timeout', async () => {
+    await handler.execute({
+      captureMode: 'game',
+      outputPath: 'Assets/Screenshots/game.png'
+    });
+
+    assert.deepEqual(unityConnection.sendCommand.mock.calls[0].arguments, [
+      'capture_screenshot',
+      {
+        captureMode: 'game',
+        outputPath: 'Assets/Screenshots/game.png'
+      },
+      {
+        timeoutMs: 90000
+      }
+    ]);
   });
 });

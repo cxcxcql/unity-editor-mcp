@@ -296,6 +296,59 @@ describe('PlayToolHandler', () => {
       ]);
     });
 
+    it('should retry bounded state poll command timeouts during play mode recovery', async () => {
+      const calls = [];
+      let statePolls = 0;
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {
+          calls.push(['connect']);
+        }),
+        sendCommand: mock.fn(async (command, params, options) => {
+          calls.push([command, params, options]);
+          if (command === 'play_game') {
+            throw new Error('Connection closed');
+          }
+
+          statePolls++;
+          if (statePolls === 1) {
+            const error = new Error('Command timeout');
+            error.code = 'COMMAND_TIMEOUT';
+            throw error;
+          }
+
+          return {
+            status: 'success',
+            state: {
+              isPlaying: true,
+              isPaused: false,
+              isCompiling: false,
+              isUpdating: false
+            }
+          };
+        })
+      };
+      handler = new PlayToolHandler(mockConnection);
+
+      const result = await handler.handle({}, {
+        playModeRecovery: {
+          timeoutMs: 100,
+          pollIntervalMs: 0,
+          commandTimeoutMs: 10
+        }
+      });
+
+      assert.equal(result.status, 'success');
+      assert.equal(result.result.state.isPlaying, true);
+      assert.deepEqual(calls, [
+        ['play_game', {}, undefined],
+        ['connect'],
+        ['get_editor_state', {}, { timeoutMs: 10 }],
+        ['connect'],
+        ['get_editor_state', {}, { timeoutMs: 10 }]
+      ]);
+    });
+
     it('should return a structured timeout error when play mode cannot be verified', async () => {
       mockConnection = {
         isConnected: mock.fn(() => true),

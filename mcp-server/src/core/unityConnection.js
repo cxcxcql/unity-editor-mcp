@@ -139,7 +139,7 @@ export class UnityConnection extends EventEmitter {
           this.rejectQueuedCommands(closeError);
           rejectConnect(closeError);
 
-          if (!this.isDisconnecting && process.env.DISABLE_AUTO_RECONNECT !== 'true') {
+          if (!this.isDisconnecting && this.shouldAutoReconnect()) {
             this.scheduleReconnect();
           }
           return;
@@ -171,7 +171,7 @@ export class UnityConnection extends EventEmitter {
         this.emit('disconnected');
         
         // Attempt reconnection only if not intentionally disconnecting
-        if (!this.isDisconnecting && process.env.DISABLE_AUTO_RECONNECT !== 'true') {
+        if (!this.isDisconnecting && this.shouldAutoReconnect()) {
           this.scheduleReconnect();
         }
       });
@@ -195,7 +195,7 @@ export class UnityConnection extends EventEmitter {
           // re-arms reconnection. A connect that *hangs* (Unity mid-domain-reload
           // or slow play-mode boot) would otherwise silently kill the reconnect
           // chain, leaving the bridge stuck until manually restarted. Re-arm it.
-          if (!this.isDisconnecting && process.env.DISABLE_AUTO_RECONNECT !== 'true') {
+          if (!this.isDisconnecting && this.shouldAutoReconnect()) {
             this.scheduleReconnect();
           }
         }
@@ -207,6 +207,11 @@ export class UnityConnection extends EventEmitter {
     if (this.listenerCount('error') > 0) {
       this.emit('error', error);
     }
+  }
+
+  shouldAutoReconnect() {
+    return this.config.unity.autoReconnect !== false &&
+      process.env.DISABLE_AUTO_RECONNECT !== 'true';
   }
 
   async resolveEndpoint() {
@@ -443,7 +448,7 @@ export class UnityConnection extends EventEmitter {
    * @param {object} params - Command parameters
    * @returns {Promise<any>} - Response from Unity
    */
-  async sendCommand(type, params = {}) {
+  async sendCommand(type, params = {}, options = {}) {
     logger.info(`[Unity] sendCommand called: ${type}`, { connected: this.connected, params });
 
     if (this.isDisconnecting) {
@@ -451,18 +456,18 @@ export class UnityConnection extends EventEmitter {
     }
 
     if (!this.commandInFlight) {
-      return this.runQueuedCommand(type, params);
+      return this.runQueuedCommand(type, params, options);
     }
 
     return new Promise((resolve, reject) => {
-      this.commandQueue.push({ type, params, resolve, reject });
+      this.commandQueue.push({ type, params, options, resolve, reject });
     });
   }
 
-  async runQueuedCommand(type, params) {
+  async runQueuedCommand(type, params, options = {}) {
     this.commandInFlight = true;
     try {
-      return await this.sendCommandNow(type, params);
+      return await this.sendCommandNow(type, params, options);
     } finally {
       this.commandInFlight = false;
       this.runNextQueuedCommand();
@@ -475,10 +480,10 @@ export class UnityConnection extends EventEmitter {
     }
 
     const next = this.commandQueue.shift();
-    this.runQueuedCommand(next.type, next.params).then(next.resolve, next.reject);
+    this.runQueuedCommand(next.type, next.params, next.options).then(next.resolve, next.reject);
   }
 
-  async sendCommandNow(type, params = {}) {
+  async sendCommandNow(type, params = {}, options = {}) {
     if (!this.connected) {
       logger.error('[Unity] Cannot send command - not connected');
       throw new Error('Not connected to Unity');
@@ -493,14 +498,21 @@ export class UnityConnection extends EventEmitter {
     };
 
     return new Promise((resolve, reject) => {
-      logger.info(`[Unity] Setting up command ${id} with timeout ${this.config.unity.commandTimeout}ms`);
+      const timeoutMs = normalizeTimeoutMs(options.timeoutMs, this.config.unity.commandTimeout);
+      logger.info(`[Unity] Setting up command ${id} with timeout ${timeoutMs}ms`);
       
       // Set up timeout
       const timeout = setTimeout(() => {
-        logger.error(`[Unity] Command ${id} timed out after ${this.config.unity.commandTimeout}ms`);
+        if (!this.pendingCommands.has(id)) {
+          return;
+        }
+
+        const timeoutError = createCommandTimeoutError(type, id, timeoutMs);
+        logger.error(`[Unity] Command ${id} timed out after ${timeoutMs}ms`);
         this.pendingCommands.delete(id);
-        reject(new Error('Command timeout'));
-      }, this.config.unity.commandTimeout);
+        reject(timeoutError);
+        this.closeTimedOutConnection(timeoutError);
+      }, timeoutMs);
 
       // Store pending command
       this.pendingCommands.set(id, {
@@ -539,6 +551,30 @@ export class UnityConnection extends EventEmitter {
     });
   }
 
+  closeTimedOutConnection(timeoutError) {
+    const socket = this.socket;
+    this.connected = false;
+    this.socket = null;
+    this.endpoint = null;
+    this.messageBuffer = Buffer.alloc(0);
+
+    const closeError = createConnectionClosedError('Connection closed after command timeout');
+    if (timeoutError?.details) {
+      closeError.details = timeoutError.details;
+    }
+    for (const [, pending] of this.pendingCommands) {
+      pending.reject(closeError);
+    }
+    this.pendingCommands.clear();
+    this.rejectQueuedCommands(closeError);
+    this.emit('disconnected');
+
+    if (socket) {
+      socket.removeAllListeners();
+      socket.destroy();
+    }
+  }
+
   /**
    * Sends a ping command to Unity
    * @returns {Promise<any>}
@@ -575,6 +611,24 @@ function createConnectionClosedError(message = 'Connection closed') {
   const error = new Error(message);
   error.code = 'CONNECTION_CLOSED';
   return error;
+}
+
+function createCommandTimeoutError(type, id, timeoutMs) {
+  const error = new Error('Command timeout');
+  error.code = 'COMMAND_TIMEOUT';
+  error.details = {
+    command: type,
+    commandId: id,
+    timeoutMs
+  };
+  return error;
+}
+
+function normalizeTimeoutMs(value, fallback) {
+  if (Number.isFinite(value) && value > 0) {
+    return Math.max(1, Math.floor(value));
+  }
+  return fallback;
 }
 
 function redactEndpoint(endpoint) {
