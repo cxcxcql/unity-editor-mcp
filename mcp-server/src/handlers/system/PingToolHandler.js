@@ -1,4 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
+import { getServerMetadata } from '../../core/serverMetadata.js';
 
 /**
  * Handler for the ping tool
@@ -52,6 +53,7 @@ export class PingToolHandler extends BaseToolHandler {
       git: result.git,
       port: result.port,
       packageVersion: result.packageVersion,
+      server: getServerMetadata(),
       connection: this.unityConnection.getConnectionInfo ? this.unityConnection.getConnectionInfo() : undefined
     };
   }

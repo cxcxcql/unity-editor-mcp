@@ -1,6 +1,7 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
 import { config } from '../../core/config.js';
 import { createDiscoveryReport, redactDiscoveryReport } from '../../core/unityDiscovery.js';
+import { getServerMetadata } from '../../core/serverMetadata.js';
 
 /**
  * Handler for listing Unity Editor MCP instances discovered on this machine.
@@ -64,11 +65,12 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
       cwd: process.cwd()
     }));
 
-    if (params.compact === true) {
+    if (params.compact !== false) {
       return createCompactReport(report, params.includeStale === true);
     }
 
     return {
+      server: getServerMetadata(),
       registryDir: report.registryDir,
       targetProjectPath: report.targetProjectPath,
       targetWorkspaceId: report.targetWorkspaceId,
@@ -109,6 +111,7 @@ function createCompactReport(report, includeStale) {
 
   return {
     compact: true,
+    server: getServerMetadata(),
     registryDir: report.registryDir,
     targetProjectPath: report.targetProjectPath,
     targetWorkspaceId: report.targetWorkspaceId,
@@ -116,7 +119,8 @@ function createCompactReport(report, includeStale) {
     selectionError: report.error,
     selectionErrorCode: report.errorCode,
     instances,
-    conflicts: instances.filter((instance) => instance.recommended !== true)
+    conflicts: instances.filter((instance) => instance.recommended !== true),
+    staleCounts: countStaleInstances(report.instances)
   };
 }
 
@@ -154,4 +158,21 @@ function summarizeInstance(instance, selectedInstanceId) {
     stale: instance.stale,
     recommended: instance.instanceId === selectedInstanceId
   };
+}
+
+function countStaleInstances(instances) {
+  const byProject = {};
+  let total = 0;
+
+  for (const instance of instances) {
+    if (!instance.stale && instance.alive) {
+      continue;
+    }
+
+    total++;
+    const key = instance.projectName || instance.projectPath || '(unknown project)';
+    byProject[key] = (byProject[key] || 0) + 1;
+  }
+
+  return { total, byProject };
 }

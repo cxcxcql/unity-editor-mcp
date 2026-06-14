@@ -206,3 +206,77 @@ Until these are fixed, this sequence worked:
 8. Use project-side menu hooks for runtime snapshots and camera capture.
 9. Use `stop_game`, then poll `get_editor_state` until `isPlaying: false`.
 
+## Retest After Main Update
+
+Retested: 2026-06-14
+Unity project package lock: `8b624273f40b51c90c5e84f3be0102841cd15976`
+Resolved package cache: `Library/PackageCache/com.unity.editor-mcp@16418925059f`
+Reported package version: `0.15.5`
+
+Status summary:
+
+1. `play_game` connection-close error: not fixed.
+   - `play_game` still returned `TOOL_ERROR` / `Connection closed`.
+   - Re-running discovery showed Play Mode had started on a new endpoint.
+
+2. `stop_game` stale state: not fixed.
+   - `stop_game` returned `message: "Exited play mode"` while the returned state still had `isPlaying: true`.
+   - A follow-up `get_editor_state` returned `isPlaying: false`.
+
+3. PlayerLoop stuck after Play Mode entry: fixed in this run / improved.
+   - After reconnecting from the `play_game` connection close, `get_editor_state` reported `isPlayerLoopAdvancing: true`.
+   - `frameCount` and `time` were advancing without the old pause/resume workaround.
+   - `get_editor_state` now exposes `frameCount`, `time`, `realtimeSinceStartup`, `timeScale`, and `isPlayerLoopAdvancing`.
+
+4. Game View screenshot failure: fixed.
+   - `capture_screenshot` with `captureMode: "game"` succeeded.
+   - Response: `Game View screenshot captured via Camera fallback`.
+
+5. Scene screenshot ambiguity: improved.
+   - `capture_screenshot` with `captureMode: "scene"` still captures Scene View, but now returns explicit `captureMode: "scene"`, a Scene View message, and camera position/rotation.
+
+6. Parallel component calls timeout: not fixed.
+   - Parallel `list_components` and `get_component_values` both timed out after 30 seconds.
+   - The same calls worked immediately when run sequentially.
+
+7. Noisy registry/discovery output: not fixed.
+   - `list_unity_instances` still returned stale/duplicate current-project records and old project records.
+   - Explicit `projectPath` selection still chose the correct endpoint.
+
+8. Port fallback logged as error: not reproduced after update.
+   - Clean log scan after retest did not show the previous MCP port-fallback error.
+
+9. MCP internal command logging noise: fixed in this run.
+   - `enhanced_read_logs` no longer returned MCP internal command processing logs as warnings after a clean run.
+
+10. Placeholder compilation timestamp: fixed.
+   - `wait_for_compilation` now returned `lastCompilationTime: null`, not `0001-01-01T00:00:00.0000000`.
+
+11. Generic menu execution failure detail: not fixed.
+   - `execute_menu_item` for `Edit/Play` still returned `Menu item found but could not be executed (may be disabled or context-dependent)` without more detail.
+
+Current remaining blockers from this retest:
+- Play Mode transition response/reconnect semantics.
+- Stop Play Mode final-state polling.
+- Concurrent command handling.
+- Discovery result cleanup/compactness.
+- Menu failure diagnostics.
+
+## Fix Iteration 2 Checklist
+
+Implementation target:
+- Add retrying Play Mode verification after reload-related disconnects.
+- Verify Stop Play Mode final state before returning success.
+- Coalesce concurrent Node-side Unity connection attempts and reject queued commands on connection close.
+- Make `list_unity_instances` compact by default while preserving `compact: false` verbose output.
+- Add server metadata to `ping` and `list_unity_instances` for retest source verification.
+- Add structured menu failure diagnostics and recommended MCP tool hints.
+
+Manual retest checklist after this iteration:
+1. Restart the MCP server/client session so the Node process loads this commit.
+2. Call `ping` and confirm `structuredContent.server.gitHead` matches the new commit.
+3. Call `play_game` from Edit Mode and confirm it returns success with verified `state.isPlaying: true`.
+4. Call `stop_game` and confirm the returned state has `isPlaying: false`.
+5. Run parallel `list_components` and `get_component_values` and confirm both return or fail independently without hanging until the client timeout.
+6. Call default `list_unity_instances` and confirm it is compact, selected-endpoint focused, and shows stale counts instead of full stale records.
+7. Call `execute_menu_item` for `Edit/Play` and confirm diagnostics include `validationStatus`, `reasonCode`, `editorState`, and `recommendedTool`.

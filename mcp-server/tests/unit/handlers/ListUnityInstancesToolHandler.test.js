@@ -45,7 +45,7 @@ describe('ListUnityInstancesToolHandler', () => {
     assert.equal(handler.inputSchema.properties.includeStale.type, 'boolean');
   });
 
-  it('returns workspace and Git metadata for discovered instances', async () => {
+  it('returns workspace and Git metadata for discovered instances in verbose mode', async () => {
     const projectPath = path.join(tempDir, 'Project');
     await writeInstance('unity.json', {
       instanceId: 'unity-main',
@@ -63,7 +63,7 @@ describe('ListUnityInstancesToolHandler', () => {
       }
     });
 
-    const result = await handler.execute({ workspaceId: 'workspace-main' });
+    const result = await handler.execute({ workspaceId: 'workspace-main', compact: false });
 
     assert.equal(result.targetWorkspaceId, 'workspace-main');
     assert.equal(result.selectedEndpoint.source, 'discovery');
@@ -82,7 +82,7 @@ describe('ListUnityInstancesToolHandler', () => {
     });
   });
 
-  it('returns compact selected endpoint and conflicts without stale noise by default', async () => {
+  it('defaults to compact selected endpoint and conflicts without stale noise', async () => {
     const projectPath = path.join(tempDir, 'Project');
     await writeInstance('selected.json', {
       instanceId: 'selected',
@@ -111,15 +111,39 @@ describe('ListUnityInstancesToolHandler', () => {
       lastSeen: new Date(Date.now() - 60000).toISOString()
     });
 
-    const result = await handler.execute({ projectPath, compact: true });
+    const result = await handler.execute({ projectPath });
 
     assert.equal(result.compact, true);
+    assert.equal(result.server.packageName, 'unity-editor-mcp');
+    assert.match(result.server.packageVersion, /^\d+\.\d+\.\d+/);
+    assert.equal(typeof result.server.gitHead, 'string');
+    assert.equal(result.server.pid, process.pid);
     assert.equal(result.selectedEndpoint.instanceId, 'selected');
     assert.equal(result.selectedEndpoint.recommended, true);
     assert.equal(result.instances.length, 2);
     assert.deepEqual(result.instances.map((instance) => instance.instanceId), ['selected', 'conflict']);
     assert.equal(result.conflicts.length, 1);
     assert.equal(result.conflicts[0].instanceId, 'conflict');
+    assert.equal(result.staleCounts.total, 1);
+    assert.equal(result.staleCounts.byProject.OldProject, 1);
+  });
+
+  it('preserves full verbose output when compact is false', async () => {
+    const projectPath = path.join(tempDir, 'Project');
+    await writeInstance('selected.json', {
+      instanceId: 'selected',
+      projectPath,
+      projectName: 'Project',
+      workspaceId: 'workspace-selected',
+      port: 50123
+    });
+
+    const result = await handler.execute({ projectPath, compact: false });
+
+    assert.equal(result.compact, undefined);
+    assert.equal(result.instances.length, 1);
+    assert.equal(result.instances[0].instanceId, 'selected');
+    assert.equal(result.selectedEndpoint.source, 'discovery');
   });
 
   async function writeInstance(fileName, data) {

@@ -1,5 +1,10 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
-import { extractState, isRecoverablePlayModeDisconnect, pollEditorState, recoverPlayModeState } from './playModeRecovery.js';
+import {
+  STOP_TRANSITION_TIMEOUT_MS,
+  extractState,
+  isRecoverablePlayModeDisconnect,
+  waitForEditorState
+} from './playModeRecovery.js';
 
 /**
  * Handler for stopping Unity play mode
@@ -23,7 +28,7 @@ export class StopToolHandler extends BaseToolHandler {
    * @param {object} params - Empty object for this command
    * @returns {Promise<object>} Play mode state
    */
-  async execute(params) {
+  async execute(params, context = {}) {
     // Ensure connected
     if (!this.unityConnection.isConnected()) {
       throw new Error('Unity connection not available');
@@ -34,7 +39,27 @@ export class StopToolHandler extends BaseToolHandler {
       result = await this.unityConnection.sendCommand('stop_game', params);
     } catch (error) {
       if (isRecoverablePlayModeDisconnect(error)) {
-        result = await recoverPlayModeState(this.unityConnection, 'Exited play mode after reconnect');
+        const verified = await waitForEditorState(
+          this.unityConnection,
+          (candidateState) => candidateState.isPlaying === false,
+          {
+            timeoutMs: context.playModeRecovery?.timeoutMs ?? STOP_TRANSITION_TIMEOUT_MS,
+            pollIntervalMs: context.playModeRecovery?.pollIntervalMs,
+            timeoutCode: 'STOP_MODE_TRANSITION_TIMEOUT',
+            timeoutMessage: 'Timed out waiting for Unity to exit play mode after reconnect',
+            connectBeforeFirstPoll: true
+          }
+        );
+
+        return {
+          status: 'success',
+          message: 'Exited play mode after reconnect',
+          recoveredAfterReconnect: true,
+          state: verified.state,
+          attempts: verified.attempts,
+          elapsedMs: verified.elapsedMs,
+          polledUntilFinalState: true
+        };
       } else {
         throw error;
       }
@@ -49,9 +74,15 @@ export class StopToolHandler extends BaseToolHandler {
     
     const state = extractState(result);
     if (state.isPlaying === true) {
-      const finalState = await pollEditorState(
+      const finalState = await waitForEditorState(
         this.unityConnection,
-        (candidateState) => candidateState.isPlaying === false
+        (candidateState) => candidateState.isPlaying === false,
+        {
+          timeoutMs: context.playModeRecovery?.timeoutMs ?? STOP_TRANSITION_TIMEOUT_MS,
+          pollIntervalMs: context.playModeRecovery?.pollIntervalMs,
+          timeoutCode: 'STOP_MODE_TRANSITION_TIMEOUT',
+          timeoutMessage: 'Timed out waiting for Unity to exit play mode'
+        }
       );
 
       return {
@@ -59,8 +90,9 @@ export class StopToolHandler extends BaseToolHandler {
         status: 'success',
         message: result.message || 'Exited play mode',
         state: finalState.state,
-        polledUntilFinalState: !finalState.timedOut,
-        transitional: finalState.timedOut
+        polledUntilFinalState: true,
+        attempts: finalState.attempts,
+        elapsedMs: finalState.elapsedMs
       };
     }
 

@@ -10,6 +10,7 @@ export class UnityConnection extends EventEmitter {
   constructor(options = {}) {
     super();
     this.config = options.config || config;
+    this.socketFactory = options.socketFactory || (() => new net.Socket());
     this.socket = null;
     this.connected = false;
     this.reconnectAttempts = 0;
@@ -18,6 +19,8 @@ export class UnityConnection extends EventEmitter {
     this.pendingCommands = new Map();
     this.commandQueue = [];
     this.commandInFlight = false;
+    this.connectPromise = null;
+    this.activeConnectReject = null;
     this.isDisconnecting = false;
     this.messageBuffer = Buffer.alloc(0);
     this.endpoint = null;
@@ -32,6 +35,19 @@ export class UnityConnection extends EventEmitter {
       return;
     }
 
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    this.connectPromise = this.connectOnce();
+    try {
+      return await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  async connectOnce() {
     // Skip connection in CI/test environments
     if (process.env.NODE_ENV === 'test' || process.env.CI === 'true') {
       logger.info('Skipping Unity connection in test/CI environment');
@@ -43,7 +59,7 @@ export class UnityConnection extends EventEmitter {
     return new Promise((resolve, reject) => {
       logger.info(`Connecting to Unity at ${endpoint.host}:${endpoint.port} (${endpoint.source})...`);
       
-      this.socket = new net.Socket();
+      this.socket = this.socketFactory();
       let connectionTimeout = null;
       let resolved = false;
       
@@ -54,16 +70,39 @@ export class UnityConnection extends EventEmitter {
           connectionTimeout = null;
         }
       };
+
+      const rejectConnect = (error) => {
+        if (resolved) {
+          return;
+        }
+
+        resolved = true;
+        clearConnectionTimeout();
+        this.activeConnectReject = null;
+        reject(error);
+      };
+
+      const resolveConnect = () => {
+        if (resolved) {
+          return;
+        }
+
+        resolved = true;
+        clearConnectionTimeout();
+        this.activeConnectReject = null;
+        resolve();
+      };
+
+      this.activeConnectReject = rejectConnect;
       
       // Set up event handlers
       this.socket.on('connect', () => {
         logger.info('Connected to Unity Editor');
         this.connected = true;
+        this.isDisconnecting = false;
         this.reconnectAttempts = 0;
-        resolved = true;
-        clearConnectionTimeout();
         this.emit('connected');
-        resolve();
+        resolveConnect();
       });
 
       this.socket.on('data', (data) => {
@@ -75,8 +114,6 @@ export class UnityConnection extends EventEmitter {
         this.emitConnectionError(error);
         
         if (!this.connected && !resolved) {
-          resolved = true;
-          clearConnectionTimeout();
           // Mark as disconnecting to prevent reconnection
           this.isDisconnecting = true;
           // Destroy the socket to clean up properly
@@ -84,13 +121,29 @@ export class UnityConnection extends EventEmitter {
           this.isDisconnecting = false;
           // Re-discover on the next reconnect rather than reusing a stale endpoint.
           this.endpoint = null;
-          reject(error);
+          this.rejectQueuedCommands(createConnectionClosedError(error.message || 'Connection failed'));
+          rejectConnect(error);
         }
       });
 
       this.socket.on('close', () => {
         // Clear the connection timeout when socket closes
         clearConnectionTimeout();
+
+        if (!this.connected && !resolved) {
+          const closeError = createConnectionClosedError();
+          this.connected = false;
+          this.socket = null;
+          this.messageBuffer = Buffer.alloc(0);
+          this.endpoint = null;
+          this.rejectQueuedCommands(closeError);
+          rejectConnect(closeError);
+
+          if (!this.isDisconnecting && process.env.DISABLE_AUTO_RECONNECT !== 'true') {
+            this.scheduleReconnect();
+          }
+          return;
+        }
         
         // Check if we're already handling disconnection
         if (this.isDisconnecting || !this.socket) {
@@ -106,10 +159,12 @@ export class UnityConnection extends EventEmitter {
         this.messageBuffer = Buffer.alloc(0);
         
         // Clear pending commands
+        const closeError = createConnectionClosedError();
         for (const [id, pending] of this.pendingCommands) {
-          pending.reject(new Error('Connection closed'));
+          pending.reject(closeError);
         }
         this.pendingCommands.clear();
+        this.rejectQueuedCommands(closeError);
         
         // Emit disconnected event
         this.emit('disconnected');
@@ -126,7 +181,6 @@ export class UnityConnection extends EventEmitter {
       // Set timeout for initial connection
       connectionTimeout = setTimeout(() => {
         if (!this.connected && !resolved && this.socket) {
-          resolved = true;
           // Remove event listeners before destroying to prevent callbacks after timeout
           this.socket.removeAllListeners();
           this.socket.destroy();
@@ -135,7 +189,7 @@ export class UnityConnection extends EventEmitter {
           // live listener (the port may have changed after a Unity reload) instead
           // of latching onto this stale one.
           this.endpoint = null;
-          reject(new Error('Connection timeout'));
+          rejectConnect(new Error('Connection timeout'));
           // removeAllListeners() above strips the 'close' handler that normally
           // re-arms reconnection. A connect that *hangs* (Unity mid-domain-reload
           // or slow play-mode boot) would otherwise silently kill the reconnect
@@ -173,6 +227,19 @@ export class UnityConnection extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+
+    const error = createConnectionClosedError('Connection closed by disconnect');
+
+    if (this.activeConnectReject) {
+      this.activeConnectReject(error);
+      this.activeConnectReject = null;
+    }
+
+    for (const [, pending] of this.pendingCommands) {
+      pending.reject(error);
+    }
+    this.pendingCommands.clear();
+    this.rejectQueuedCommands(error);
     
     if (this.socket) {
       try {
@@ -187,6 +254,17 @@ export class UnityConnection extends EventEmitter {
     
     this.connected = false;
     this.isDisconnecting = false;
+  }
+
+  rejectQueuedCommands(error) {
+    if (this.commandQueue.length === 0) {
+      return;
+    }
+
+    const queued = this.commandQueue.splice(0);
+    for (const command of queued) {
+      command.reject(error);
+    }
   }
 
   /**
@@ -367,6 +445,10 @@ export class UnityConnection extends EventEmitter {
   async sendCommand(type, params = {}) {
     logger.info(`[Unity] sendCommand called: ${type}`, { connected: this.connected, params });
 
+    if (this.isDisconnecting) {
+      throw createConnectionClosedError('Connection is disconnecting');
+    }
+
     if (!this.commandInFlight) {
       return this.runQueuedCommand(type, params);
     }
@@ -486,6 +568,12 @@ function redactCommand(command) {
     ...command,
     ...(command.authToken && { authToken: '[redacted]' })
   };
+}
+
+function createConnectionClosedError(message = 'Connection closed') {
+  const error = new Error(message);
+  error.code = 'CONNECTION_CLOSED';
+  return error;
 }
 
 function redactEndpoint(endpoint) {

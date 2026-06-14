@@ -202,6 +202,18 @@ export class ExecuteMenuItemToolHandler extends BaseToolHandler {
       if (response.menuExists !== undefined) {
         result.menuExists = response.menuExists;
       }
+      if (response.validationStatus !== undefined) {
+        result.validationStatus = response.validationStatus;
+      }
+      if (response.reasonCode !== undefined) {
+        result.reasonCode = response.reasonCode;
+      }
+      if (response.editorState !== undefined) {
+        result.editorState = response.editorState;
+      }
+      if (response.recommendedTool !== undefined) {
+        result.recommendedTool = response.recommendedTool;
+      }
       if (response.alias) {
         result.alias = response.alias;
       }

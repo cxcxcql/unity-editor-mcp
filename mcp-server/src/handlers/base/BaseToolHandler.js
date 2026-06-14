@@ -69,6 +69,7 @@ export class BaseToolHandler {
         details: {
           tool: this.name,
           params: this.summarizeParams(safeParams),
+          ...(error.details && typeof error.details === 'object' ? error.details : {}),
           validation: error instanceof SchemaValidationError ? error.errors : undefined,
           stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         }

@@ -44,6 +44,44 @@ namespace UnityEditorMCP.Handlers
             "GameObject/Align View to Selected"
         };
 
+        private static readonly HashSet<string> KnownMenuPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "File/Quit",
+            "File/New Scene",
+            "File/Open Scene",
+            "File/Save",
+            "File/Save As...",
+            "File/Save Project",
+            "Edit/Play",
+            "Edit/Undo",
+            "Edit/Redo",
+            "Edit/Cut",
+            "Edit/Copy",
+            "Edit/Paste",
+            "Edit/Select All",
+            "Assets/Create/Folder",
+            "Assets/Create/C# Script",
+            "Assets/Create/Material",
+            "Assets/Refresh",
+            "Assets/Reimport All",
+            "GameObject/Create Empty",
+            "GameObject/3D Object/Cube",
+            "GameObject/3D Object/Sphere",
+            "GameObject/3D Object/Cylinder",
+            "GameObject/3D Object/Plane",
+            "GameObject/Light/Directional Light",
+            "GameObject/Audio/Audio Source",
+            "GameObject/Camera",
+            "Window/General/Console",
+            "Window/General/Project",
+            "Window/General/Hierarchy",
+            "Window/General/Inspector",
+            "Window/General/Scene",
+            "Window/General/Game",
+            "Window/Animation/Animation",
+            "Window/Animation/Animator"
+        };
+
         /// <summary>
         /// Executes a Unity Editor menu item
         /// </summary>
@@ -65,7 +103,13 @@ namespace UnityEditorMCP.Handlers
                     return new
                     {
                         success = false,
-                        error = "safetyCheck: false requires UNITY_MCP_ALLOW_UNSAFE_MENU=1 in the Unity Editor environment"
+                        error = "safetyCheck: false requires UNITY_MCP_ALLOW_UNSAFE_MENU=1 in the Unity Editor environment",
+                        executed = false,
+                        menuExists = IsKnownMenuPath(menuPath),
+                        validationStatus = "not_executed",
+                        reasonCode = "UNSAFE_MENU_OVERRIDE_NOT_ENABLED",
+                        editorState = CreateEditorStateDiagnostics(),
+                        recommendedTool = GetRecommendedTool(menuPath)
                     };
                 }
 
@@ -75,7 +119,12 @@ namespace UnityEditorMCP.Handlers
                     return new
                     {
                         success = false,
-                        error = "menuPath is required"
+                        error = "menuPath is required",
+                        executed = false,
+                        menuExists = false,
+                        validationStatus = "not_found",
+                        reasonCode = "MENU_PATH_REQUIRED",
+                        editorState = CreateEditorStateDiagnostics()
                     };
                 }
 
@@ -120,7 +169,13 @@ namespace UnityEditorMCP.Handlers
                     return new
                     {
                         success = false,
-                        error = "menuPath must be in format \"Category/MenuItem\" (e.g., \"Assets/Refresh\")"
+                        error = "menuPath must be in format \"Category/MenuItem\" (e.g., \"Assets/Refresh\")",
+                        executed = false,
+                        menuExists = false,
+                        validationStatus = "not_found",
+                        reasonCode = "INVALID_MENU_PATH_FORMAT",
+                        editorState = CreateEditorStateDiagnostics(),
+                        recommendedTool = GetRecommendedTool(menuPath)
                     };
                 }
 
@@ -130,7 +185,14 @@ namespace UnityEditorMCP.Handlers
                     return new
                     {
                         success = false,
-                        error = $"Menu item is blacklisted for safety: {menuPath}. Set UNITY_MCP_ALLOW_UNSAFE_MENU=1 before using safetyCheck: false."
+                        error = $"Menu item is blacklisted for safety: {menuPath}. Set UNITY_MCP_ALLOW_UNSAFE_MENU=1 before using safetyCheck: false.",
+                        menuPath = menuPath,
+                        executed = false,
+                        menuExists = true,
+                        validationStatus = "not_executed",
+                        reasonCode = "BLACKLISTED",
+                        editorState = CreateEditorStateDiagnostics(),
+                        recommendedTool = GetRecommendedTool(menuPath)
                     };
                 }
 
@@ -139,12 +201,14 @@ namespace UnityEditorMCP.Handlers
 
                 // Execute the menu item
                 bool executed = false;
-                bool menuExists = true;
+                bool knownMenuPath = IsKnownMenuPath(menuPath);
+                bool menuExists = knownMenuPath;
 
                 try
                 {
                     // Try to execute the menu item
                     executed = EditorApplication.ExecuteMenuItem(menuPath);
+                    menuExists = knownMenuPath || executed;
                     
                     if (!executed)
                     {
@@ -171,6 +235,10 @@ namespace UnityEditorMCP.Handlers
                     executed = executed,
                     menuExists = menuExists,
                     executionTime = executionTime,
+                    validationStatus = executed ? "executable" : menuExists ? "not_executed" : "not_found",
+                    reasonCode = executed ? null : menuExists ? "EXECUTE_MENU_ITEM_FALSE" : "MENU_NOT_IN_KNOWN_LIST",
+                    editorState = CreateEditorStateDiagnostics(),
+                    recommendedTool = GetRecommendedTool(menuPath),
                     message = executed 
                         ? "Menu item executed successfully" 
                         : menuExists 
@@ -188,6 +256,10 @@ namespace UnityEditorMCP.Handlers
                         result.executed,
                         result.menuExists,
                         result.executionTime,
+                        result.validationStatus,
+                        result.reasonCode,
+                        result.editorState,
+                        result.recommendedTool,
                         result.message,
                         alias = alias
                     };
@@ -337,6 +409,43 @@ namespace UnityEditorMCP.Handlers
             var value = Environment.GetEnvironmentVariable("UNITY_MCP_ALLOW_UNSAFE_MENU");
             return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsKnownMenuPath(string menuPath)
+        {
+            return !string.IsNullOrEmpty(menuPath) &&
+                   (KnownMenuPaths.Contains(menuPath) || BlacklistedMenus.Contains(menuPath));
+        }
+
+        private static string GetRecommendedTool(string menuPath)
+        {
+            if (string.Equals(menuPath, "Edit/Play", StringComparison.OrdinalIgnoreCase))
+            {
+                return EditorApplication.isPlaying ? "stop_game" : "play_game";
+            }
+
+            if (string.Equals(menuPath, "Assets/Refresh", StringComparison.OrdinalIgnoreCase))
+            {
+                return "refresh_assets";
+            }
+
+            return null;
+        }
+
+        private static object CreateEditorStateDiagnostics()
+        {
+            return new
+            {
+                isPlaying = EditorApplication.isPlaying,
+                isPaused = EditorApplication.isPaused,
+                isCompiling = EditorApplication.isCompiling,
+                isUpdating = EditorApplication.isUpdating,
+                focusedWindow = EditorWindow.focusedWindow != null
+                    ? EditorWindow.focusedWindow.titleContent.text
+                    : null,
+                selectionCount = Selection.objects != null ? Selection.objects.Length : 0,
+                activeObjectName = Selection.activeObject != null ? Selection.activeObject.name : null
+            };
         }
     }
 }

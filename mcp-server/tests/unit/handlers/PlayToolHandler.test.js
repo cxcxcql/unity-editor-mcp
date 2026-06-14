@@ -137,6 +137,94 @@ describe('PlayToolHandler', () => {
         ['get_editor_state', {}]
       ]);
     });
+
+    it('should retry reconnects until play mode state is verified after a reload', async () => {
+      const calls = [];
+      let connectAttempts = 0;
+      let statePolls = 0;
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {
+          calls.push(['connect']);
+          connectAttempts++;
+          if (connectAttempts < 3) {
+            throw new Error('Connection timeout');
+          }
+        }),
+        sendCommand: mock.fn(async (command, params) => {
+          calls.push([command, params]);
+          if (command === 'play_game') {
+            throw new Error('Connection closed');
+          }
+
+          statePolls++;
+          return {
+            status: 'success',
+            state: {
+              isPlaying: statePolls >= 2,
+              isPaused: false,
+              isCompiling: false,
+              isUpdating: false
+            }
+          };
+        })
+      };
+      handler = new PlayToolHandler(mockConnection);
+
+      const result = await handler.execute({}, {
+        playModeRecovery: {
+          timeoutMs: 100,
+          pollIntervalMs: 0
+        }
+      });
+
+      assert.equal(result.status, 'success');
+      assert.equal(result.recoveredAfterReconnect, true);
+      assert.equal(result.state.isPlaying, true);
+      assert.equal(result.attempts, 5);
+      assert.deepEqual(calls, [
+        ['play_game', {}],
+        ['connect'],
+        ['connect'],
+        ['connect'],
+        ['get_editor_state', {}],
+        ['get_editor_state', {}]
+      ]);
+    });
+
+    it('should return a structured timeout error when play mode cannot be verified', async () => {
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {}),
+        sendCommand: mock.fn(async (command) => {
+          if (command === 'play_game') {
+            throw new Error('Connection closed');
+          }
+
+          return {
+            status: 'success',
+            state: {
+              isPlaying: false,
+              isPaused: false
+            }
+          };
+        })
+      };
+      handler = new PlayToolHandler(mockConnection);
+
+      const result = await handler.handle({}, {
+        playModeRecovery: {
+          timeoutMs: 5,
+          pollIntervalMs: 0
+        }
+      });
+
+      assert.equal(result.status, 'error');
+      assert.equal(result.code, 'PLAY_MODE_RECOVERY_TIMEOUT');
+      assert.equal(result.details.lastState.isPlaying, false);
+      assert.equal(typeof result.details.attempts, 'number');
+      assert.equal(typeof result.details.elapsedMs, 'number');
+    });
   });
 
   describe('integration with BaseToolHandler', () => {

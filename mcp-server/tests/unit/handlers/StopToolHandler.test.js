@@ -140,6 +140,104 @@ describe('StopToolHandler', () => {
         ['stop_game', 'get_editor_state']
       );
     });
+
+    it('should retry editor state polling through transient reconnect failures after stop', async () => {
+      const calls = [];
+      let stateAttempts = 0;
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {
+          calls.push(['connect']);
+        }),
+        sendCommand: mock.fn(async (command, params) => {
+          calls.push([command, params]);
+          if (command === 'stop_game') {
+            return {
+              status: 'success',
+              message: 'Exited play mode',
+              state: {
+                isPlaying: true,
+                isPaused: false
+              }
+            };
+          }
+
+          stateAttempts++;
+          if (stateAttempts === 1) {
+            const error = new Error('Not connected to Unity');
+            error.code = 'NOT_CONNECTED';
+            throw error;
+          }
+
+          return {
+            status: 'success',
+            state: {
+              isPlaying: false,
+              isPaused: false
+            }
+          };
+        })
+      };
+      handler = new StopToolHandler(mockConnection);
+
+      const result = await handler.execute({}, {
+        playModeRecovery: {
+          timeoutMs: 100,
+          pollIntervalMs: 0
+        }
+      });
+
+      assert.equal(result.status, 'success');
+      assert.equal(result.state.isPlaying, false);
+      assert.equal(result.polledUntilFinalState, true);
+      assert.deepEqual(calls, [
+        ['stop_game', {}],
+        ['get_editor_state', {}],
+        ['connect'],
+        ['get_editor_state', {}]
+      ]);
+    });
+
+    it('should return a structured timeout error when stop final state cannot be verified', async () => {
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {}),
+        sendCommand: mock.fn(async (command) => {
+          if (command === 'stop_game') {
+            return {
+              status: 'success',
+              message: 'Exited play mode',
+              state: {
+                isPlaying: true,
+                isPaused: false
+              }
+            };
+          }
+
+          return {
+            status: 'success',
+            state: {
+              isPlaying: true,
+              isPaused: false
+            }
+          };
+        })
+      };
+      handler = new StopToolHandler(mockConnection);
+
+      const result = await handler.handle({}, {
+        playModeRecovery: {
+          timeoutMs: 5,
+          pollIntervalMs: 0
+        }
+      });
+
+      assert.equal(result.status, 'error');
+      assert.equal(result.code, 'STOP_MODE_TRANSITION_TIMEOUT');
+      assert.equal(result.details.lastState.isPlaying, true);
+      assert.equal(typeof result.details.attempts, 'number');
+      assert.equal(typeof result.details.elapsedMs, 'number');
+    });
   });
 
   describe('integration with BaseToolHandler', () => {

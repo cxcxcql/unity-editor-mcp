@@ -1,6 +1,5 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'net';
 import { EventEmitter } from 'events';
 import { UnityConnection } from '../../../src/core/unityConnection.js';
 
@@ -10,7 +9,6 @@ import { UnityConnection } from '../../../src/core/unityConnection.js';
 describe('UnityConnection reconnect resilience', () => {
   let connection;
   let mockSocket;
-  let originalSocket;
   let testConfig;
 
   beforeEach(() => {
@@ -26,8 +24,6 @@ describe('UnityConnection reconnect resilience', () => {
         discovery: { enabled: false }
       }
     };
-    connection = new UnityConnection({ config: testConfig });
-
     mockSocket = new EventEmitter();
     mockSocket.write = mock.fn((data, cb) => { if (cb) cb(); });
     mockSocket.destroy = mock.fn(() => {
@@ -40,9 +36,10 @@ describe('UnityConnection reconnect resilience', () => {
     });
     // Never auto-fire 'connect' -> connect() hangs until the timeout fires.
     mockSocket.connect = mock.fn(() => {});
-
-    originalSocket = net.Socket;
-    net.Socket = function () { return mockSocket; };
+    connection = new UnityConnection({
+      config: testConfig,
+      socketFactory: () => mockSocket
+    });
   });
 
   afterEach(() => {
@@ -60,7 +57,6 @@ describe('UnityConnection reconnect resilience', () => {
       mockSocket.removeAllListeners();
       mockSocket.destroyed = true;
     }
-    net.Socket = originalSocket;
   });
 
   it('schedules a reconnect when a connect attempt times out', async () => {

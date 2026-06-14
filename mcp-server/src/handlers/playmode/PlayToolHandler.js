@@ -23,7 +23,7 @@ export class PlayToolHandler extends BaseToolHandler {
    * @param {object} params - Empty object for this command
    * @returns {Promise<object>} Play mode state
    */
-  async execute(params) {
+  async execute(params, context = {}) {
     // Ensure connected
     if (!this.unityConnection.isConnected()) {
       throw new Error('Unity connection not available');
@@ -34,7 +34,11 @@ export class PlayToolHandler extends BaseToolHandler {
       result = await this.unityConnection.sendCommand('play_game', params);
     } catch (error) {
       if (isRecoverablePlayModeDisconnect(error)) {
-        return recoverPlayModeState(this.unityConnection, 'Entered play mode after reconnect');
+        return recoverPlayModeState(
+          this.unityConnection,
+          'Entered play mode after reconnect',
+          context.playModeRecovery
+        );
       }
       throw error;
     }

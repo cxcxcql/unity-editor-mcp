@@ -1,13 +1,11 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'net';
 import { UnityConnection } from '../../../src/core/unityConnection.js';
 import { EventEmitter } from 'events';
 
 describe('UnityConnection', () => {
   let connection;
   let mockSocket;
-  let originalSocket;
   let testConfig;
 
   beforeEach(() => {
@@ -25,7 +23,6 @@ describe('UnityConnection', () => {
         }
       }
     };
-    connection = new UnityConnection({ config: testConfig });
     mockSocket = new EventEmitter();
     mockSocket.write = mock.fn((data, callback) => {
       if (callback) callback();
@@ -42,14 +39,10 @@ describe('UnityConnection', () => {
     mockSocket.connect = mock.fn((port, host, callback) => {
       // Don't auto-connect in tests
     });
-
-    // Store original Socket constructor
-    originalSocket = net.Socket;
-    
-    // Mock net.Socket constructor
-    net.Socket = function() {
-      return mockSocket;
-    };
+    connection = new UnityConnection({
+      config: testConfig,
+      socketFactory: () => mockSocket
+    });
   });
 
   afterEach(() => {
@@ -73,9 +66,6 @@ describe('UnityConnection', () => {
       mockSocket.removeAllListeners();
       mockSocket.destroyed = true; // Prevent any further events
     }
-    
-    // Restore original Socket constructor
-    net.Socket = originalSocket;
     mock.restoreAll();
   });
 
@@ -139,6 +129,44 @@ describe('UnityConnection', () => {
       await connectPromise;
       
       assert.equal(connection.reconnectAttempts, 0);
+    });
+
+    it('should share one in-flight connection attempt between concurrent callers', async () => {
+      const firstConnect = connection.connect();
+      const secondConnect = connection.connect();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(mockSocket.connect.mock.calls.length, 1);
+
+      process.nextTick(() => {
+        mockSocket.emit('connect');
+      });
+
+      await Promise.all([firstConnect, secondConnect]);
+      assert.equal(connection.connected, true);
+    });
+
+    it('should reject if the socket closes before connect completes', async () => {
+      const connectPromise = connection.connect();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      mockSocket.emit('close');
+
+      await assert.rejects(connectPromise, /Connection closed/);
+      assert.equal(connection.connected, false);
+      assert.equal(connection.socket, null);
+      assert.equal(connection.connectPromise, null);
+    });
+
+    it('should reject an in-flight connect when disconnected intentionally', async () => {
+      const connectPromise = connection.connect();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      connection.disconnect();
+
+      await assert.rejects(connectPromise, /Connection closed by disconnect/);
+      assert.equal(connection.connected, false);
+      assert.equal(connection.connectPromise, null);
     });
   });
 
@@ -270,6 +298,26 @@ describe('UnityConnection', () => {
       }));
 
       assert.deepEqual(await secondPromise, { properties: {} });
+    });
+
+    it('should reject queued commands when the active connection closes', async () => {
+      const firstPromise = connection.sendCommand('list_components', { path: '/Player' });
+      const secondPromise = connection.sendCommand('get_component_values', { path: '/Player' });
+
+      assert.equal(mockSocket.write.mock.calls.length, 1);
+      assert.equal(connection.commandQueue.length, 1);
+
+      mockSocket.emit('close');
+
+      await assert.rejects(firstPromise, /Connection closed/);
+      await assert.rejects(
+        Promise.race([
+          secondPromise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('queued command remained pending')), 20))
+        ]),
+        /Connection closed/
+      );
+      assert.equal(connection.commandQueue.length, 0);
     });
   });
 

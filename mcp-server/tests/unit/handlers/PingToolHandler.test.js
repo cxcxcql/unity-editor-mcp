@@ -89,6 +89,12 @@ describe('PingToolHandler', () => {
         commonDir: '/tmp/TestProject/.git',
         branch: 'main'
       });
+      assert.equal(result.server.packageName, 'unity-editor-mcp');
+      assert.match(result.server.packageVersion, /^\d+\.\d+\.\d+/);
+      assert.equal(typeof result.server.gitHead, 'string');
+      assert.equal(typeof result.server.entrypoint, 'string');
+      assert.equal(result.server.pid, process.pid);
+      assert.equal(result.server.nodeVersion, process.version);
     });
 
     it('should use default echo if not provided by Unity', async () => {

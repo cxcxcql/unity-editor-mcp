@@ -5,8 +5,10 @@ import { ExecuteMenuItemToolHandler } from '../../../../src/handlers/menu/Execut
 describe('ExecuteMenuItemToolHandler', () => {
   let handler;
   let mockUnityConnection;
+  let originalUnsafeMenuEnv;
 
   beforeEach(() => {
+    originalUnsafeMenuEnv = process.env.UNITY_MCP_ALLOW_UNSAFE_MENU;
     mockUnityConnection = {
       isConnected: mock.fn(() => true),
       connect: mock.fn(async () => {}),
@@ -21,6 +23,11 @@ describe('ExecuteMenuItemToolHandler', () => {
   });
 
   afterEach(() => {
+    if (originalUnsafeMenuEnv === undefined) {
+      delete process.env.UNITY_MCP_ALLOW_UNSAFE_MENU;
+    } else {
+      process.env.UNITY_MCP_ALLOW_UNSAFE_MENU = originalUnsafeMenuEnv;
+    }
     mock.restoreAll();
   });
 
@@ -84,6 +91,8 @@ describe('ExecuteMenuItemToolHandler', () => {
     });
 
     it('should allow blacklisted items when safety check is disabled', () => {
+      process.env.UNITY_MCP_ALLOW_UNSAFE_MENU = '1';
+
       assert.doesNotThrow(() => {
         handler.validate({ 
           menuPath: 'File/Quit',
@@ -188,6 +197,8 @@ describe('ExecuteMenuItemToolHandler', () => {
     });
 
     it('should disable safety check when requested', async () => {
+      process.env.UNITY_MCP_ALLOW_UNSAFE_MENU = '1';
+
       await handler.execute({
         menuPath: 'File/Quit',
         safetyCheck: false
@@ -271,6 +282,38 @@ describe('ExecuteMenuItemToolHandler', () => {
       assert.equal(result.executed, true);
       assert.equal(result.executionTime, 150);
       assert.equal(result.menuExists, true);
+    });
+
+    it('should include non-executed menu diagnostics', async () => {
+      mockUnityConnection.sendCommand.mock.mockImplementation(async () => ({
+        success: true,
+        message: 'Menu item found but could not be executed (may be disabled or context-dependent)',
+        menuPath: 'Edit/Play',
+        executed: false,
+        executionTime: 3,
+        menuExists: true,
+        validationStatus: 'not_executed',
+        reasonCode: 'EXECUTE_MENU_ITEM_FALSE',
+        editorState: {
+          isPlaying: false,
+          isPaused: false,
+          isCompiling: false,
+          isUpdating: false,
+          focusedWindow: 'Scene'
+        },
+        recommendedTool: 'play_game'
+      }));
+
+      const result = await handler.execute({
+        menuPath: 'Edit/Play'
+      });
+
+      assert.equal(result.executed, false);
+      assert.equal(result.menuExists, true);
+      assert.equal(result.validationStatus, 'not_executed');
+      assert.equal(result.reasonCode, 'EXECUTE_MENU_ITEM_FALSE');
+      assert.equal(result.editorState.focusedWindow, 'Scene');
+      assert.equal(result.recommendedTool, 'play_game');
     });
 
     it('should handle menu discovery with filters', async () => {
