@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { UnityConnection } from '../../../src/core/unityConnection.js';
 import { EventEmitter } from 'events';
@@ -26,10 +26,10 @@ describe('UnityConnection', () => {
     };
     mockSocket = new EventEmitter();
     const socket = mockSocket;
-    mockSocket.write = mock.fn((data, callback) => {
+    mockSocket.write = createSpy((data, callback) => {
       if (callback) callback();
     });
-    mockSocket.destroy = mock.fn(() => {
+    mockSocket.destroy = createSpy(() => {
       // Simulate what a real socket does - emit close event
       setImmediate(() => {
         if (!socket.destroyed) {
@@ -38,7 +38,7 @@ describe('UnityConnection', () => {
         }
       });
     });
-    mockSocket.connect = mock.fn((port, host, callback) => {
+    mockSocket.connect = createSpy((port, host, callback) => {
       // Don't auto-connect in tests
     });
     connection = new UnityConnection({
@@ -68,7 +68,6 @@ describe('UnityConnection', () => {
       mockSocket.removeAllListeners();
       mockSocket.destroyed = true; // Prevent any further events
     }
-    mock.restoreAll();
   });
 
   describe('constructor', () => {
@@ -251,7 +250,7 @@ describe('UnityConnection', () => {
     });
 
     it('should honor per-command timeout overrides', async () => {
-      mockSocket.destroy = mock.fn(() => {
+      mockSocket.destroy = createSpy(() => {
         mockSocket.destroyed = true;
       });
 
@@ -268,7 +267,7 @@ describe('UnityConnection', () => {
     });
 
     it('should reject queued commands without writing them when the active command times out or closes', async () => {
-      mockSocket.destroy = mock.fn(() => {
+      mockSocket.destroy = createSpy(() => {
         mockSocket.destroyed = true;
       });
       const firstPromise = connection.sendCommand('capture_screenshot', {}, { timeoutMs: 5 });
@@ -290,7 +289,7 @@ describe('UnityConnection', () => {
     });
 
     it('should detach the timed-out socket so late responses cannot poison framing state', async () => {
-      mockSocket.destroy = mock.fn(() => {
+      mockSocket.destroy = createSpy(() => {
         mockSocket.destroyed = true;
       });
       const timedOutSocket = mockSocket;
@@ -623,4 +622,15 @@ function frameMessage(message) {
 function parseFramedMessage(buffer) {
   const messageLength = buffer.readInt32BE(0);
   return JSON.parse(buffer.slice(4, 4 + messageLength).toString('utf8'));
+}
+
+function createSpy(implementation = () => {}) {
+  const calls = [];
+  const spy = function(...args) {
+    calls.push({ arguments: args });
+    return implementation.apply(this, args);
+  };
+
+  spy.mock = { calls };
+  return spy;
 }

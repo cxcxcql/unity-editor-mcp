@@ -262,6 +262,43 @@ Current remaining blockers from this retest:
 - Discovery result cleanup/compactness.
 - Menu failure diagnostics.
 
+## Retest During Gameplay Sprite Fix
+
+Retested: 2026-06-14
+Unity MCP server checkout: `1849369`
+Unity MCP server package version: `1.4.0`
+Unity project package version: `0.15.5`
+
+Status summary:
+
+1. Hosted Codex MCP transport: not fixed.
+   - `list_unity_instances` and `ping` through the hosted `mcp__unity_editor_mcp` tool both failed immediately with `Transport closed`.
+   - Workaround was to import and run handlers directly from `/Users/ozan/Projects/unity-mcp/mcp-server/src`.
+
+2. `wait_for_compilation` domain-reload reconnect: not fixed.
+   - `refresh_assets` triggered compilation successfully.
+   - During compile wait, Unity disconnected on domain reload.
+   - Reconnect failed with `LOCAL_WORKSPACE_MISMATCH` and empty candidates even though the same editor re-registered shortly after.
+   - A fresh `list_unity_instances` call then selected the correct endpoint, and raw `get_compilation_state` showed zero errors/warnings.
+
+3. Focused EditMode test run: improved / usable in this run.
+   - `run_tests` started a single EditMode test and `get_test_results` eventually returned `total: 1`, `passed: 1`, `failed: 0`.
+   - The result payload still reported `isRunning: true` even after the passed summary was available.
+
+4. Play Mode transition: improved but still noisy.
+   - Direct `PlayToolHandler` recovered from the expected Play Mode connection close and returned `Entered play mode after reconnect`.
+   - Recovery needed 6 attempts and included one `LOCAL_WORKSPACE_MISMATCH` plus one 1-second `get_editor_state` timeout before succeeding.
+
+5. `stop_game` final-state polling: fixed in this direct-handler run.
+   - `StopToolHandler` returned `polledUntilFinalState: true`.
+   - Final state correctly reported `isPlaying: false`.
+
+6. Camera screenshot capture: fixed / usable.
+   - `capture_screenshot` with `captureMode: "camera"` and `cameraName: "Main Camera"` saved a 1280x720 PNG successfully.
+
+7. Runtime log reads: usable in this run.
+   - `read_logs` for `Error` and `Exception` returned zero logs after the Play Mode screenshot check.
+
 ## Retest After Main Update 2
 
 Retested: 2026-06-14
@@ -647,3 +684,88 @@ Manual retest checklist after committing, pushing, refreshing the Unity package 
 
 Known remaining non-code retest constraint:
 - Restart the MCP client/session after pulling the next commit; a running stale stdio MCP process cannot be re-bound by repository changes alone.
+
+## Retest After Main Update 6
+
+Retested: 2026-06-14
+MCP repo commit: `18493695354370df0b4c77e4507b01ac307e163b`
+Unity project package lock: `18493695354370df0b4c77e4507b01ac307e163b`
+Resolved package cache after forced package refresh: `Library/PackageCache/com.unity.editor-mcp@f80e542956e4`
+Reported Unity package version: `0.15.5`
+Reported MCP server from direct handler run: `unity-editor-mcp` `1.4.0`, `gitHead: 1849369`
+
+Setup:
+- Local MCP repo `/Users/ozan/Projects/unity-mcp` matched `origin/main` at `18493695354370df0b4c77e4507b01ac307e163b`; `git pull --ff-only` returned already up to date.
+- The Bottomless Well lock file was updated from `5b638e1ab10050b30e54014225068da4b0795617` to `18493695354370df0b4c77e4507b01ac307e163b`.
+- The package cache was deleted and Unity re-resolved the package to `com.unity.editor-mcp@f80e542956e4`.
+- The Codex-hosted MCP stdio transport still failed with `Transport closed`, including `ping` and `list_unity_instances`, so live retests were run through the pulled repo's Node handler modules directly against the Unity TCP bridge.
+
+Automated checks:
+- `node --test tests/unit/core/packageLayout.test.js` failed.
+  - Expected no empty-folder metadata files.
+  - Actual: `unity-editor-mcp/Editor/Tools.meta`.
+- `npm test -- --runInBand` failed with the same single failure.
+  - Summary: 579 tests, 577 passed, 1 failed, 1 skipped.
+  - The previous `Editor/Tools/Scene.meta` failure is gone; the remaining package-layout failure is now `Editor/Tools.meta`.
+
+Live MCP checks:
+- Initial forced package refresh caused a temporary discovery failure:
+  - Direct `list_unity_instances` saw only stale/dead or batch-mode Bottomless Well records and returned `LOCAL_WORKSPACE_MISMATCH`.
+  - Direct `get_editor_state` returned `EDITOR_STATE_RECOVERY_TIMEOUT`.
+  - `Editor.log` showed the old package shutting down and the new package registered, but no fresh non-batch listener immediately after domain reload.
+- A manual Unity `Assets > Refresh` restored the listener.
+  - Direct discovery then selected the live non-batch Bottomless Well editor, pid `47089`, port `6400`, package `0.15.5`.
+  - `ping` succeeded and reported `gitHead: 1849369`.
+  - `wait_for_compilation` completed with `errorCount: 0`, `warningCount: 0`, and no messages.
+  - `play_game` succeeded after reconnect recovery and verified `state.isPlaying: true`.
+  - Immediate `get_editor_state` returned `isPlaying: true` and `isPlayerLoopAdvancing: true`.
+  - `capture_screenshot` in Play Mode succeeded in about 0.7s via Camera fallback at 1280x720.
+  - `read_logs` for `Error` returned zero entries.
+  - `stop_game` returned verified Edit Mode with `state.isPlaying: false`.
+  - Final `read_logs` for `Warning`, `Error`, and `Exception` returned zero entries.
+
+Package/cache findings:
+- `Library/PackageCache/com.unity.editor-mcp@f80e542956e4` no longer contains `Editor/Tools/Scene.meta`.
+- The same cache still contains `Editor/Tools.meta`.
+- `git ls-files 'unity-editor-mcp/**/*.meta'` in the MCP repo also identifies `unity-editor-mcp/Editor/Tools.meta` as a tracked empty-folder metadata file.
+- During package refresh, `Editor.log` reported immutable package mutation warnings and listed `Packages/com.unity.editor-mcp/Editor/Tools`; this lines up with the remaining `Editor/Tools.meta` package-layout failure.
+
+Cleanup:
+- The full integration test created `/IntegrationTestCube`; cleanup through direct MCP `find_gameobject` / `delete_gameobject` removed it and a final find returned zero objects.
+- Screenshot capture wrote `Assets/Screenshots/screenshot_game_2026-06-14_18-24-26.png` despite `encodeAsBase64: true`; the generated PNG, `.meta`, and empty `Assets/Screenshots.meta` were removed.
+- Unity was left in Edit Mode with `isPlaying: false`.
+
+Current remaining blockers from this retest:
+- The package-layout fix is incomplete: `unity-editor-mcp/Editor/Tools.meta` is still tracked for an empty package directory and fails the new regression test.
+- Unity's listener did not immediately re-advertise after forced package cache resolution/domain reload; manual `Assets > Refresh` restored it. This should be treated as a package reload lifecycle issue unless it is expected Unity behavior.
+- The Codex MCP stdio transport still cannot recover inside this existing Codex session after the stale server process was killed; direct Node handlers work, but hosted MCP tool calls still fail with `Transport closed`.
+
+## Fix Iteration 7 Notes
+
+Root causes found after Retest After Main Update 6:
+- The previous package-layout fix removed `unity-editor-mcp/Editor/Tools/Scene.meta`, but the parent empty folder metadata `unity-editor-mcp/Editor/Tools.meta` remained tracked.
+- Because `Editor/Tools` has no tracked package content, Unity recreated that folder in the immutable Git package cache and continued reporting package/cache mutation warnings.
+- The existing `packageLayout.test.js` correctly caught this remaining metadata file, so no new production behavior was needed for the package-layout issue.
+- The listener re-advertise failure occurred during the same forced package-cache mutation/reimport cycle. The Unity startup code already writes the registry immediately when the listener starts and heartbeats afterward, so this remains a retest item after removing all empty package folder metadata rather than a speculative startup-code change.
+- While verifying this iteration, `npm run test:unit` exposed a parallel-test isolation problem in `unityConnection.test.js`: it used the global `node:test` mock registry for socket spies, and other concurrently running test files can call `mock.restoreAll()`, restoring those spies while a connect test is still pending.
+- The Codex MCP stdio transport issue remains a client/session lifecycle constraint outside the repo.
+
+Implementation target:
+- Remove `unity-editor-mcp/Editor/Tools.meta`.
+- Remove the local empty `unity-editor-mcp/Editor/Tools/` directory from the checkout.
+- Verify the package-layout regression now reports no tracked empty or missing folder `.meta` files.
+- Replace `unityConnection.test.js` socket mocks with local spies so global `mock.restoreAll()` in other files cannot affect pending socket lifecycle assertions.
+
+Verification completed locally:
+- `node --test tests/unit/core/packageLayout.test.js` failed before the fix with `unity-editor-mcp/Editor/Tools.meta`.
+- `node --test tests/unit/core/packageLayout.test.js`
+- Repository scan reported `no tracked empty/missing folder metas`.
+- `npm run test:unit` initially failed in `unityConnection.test.js` with the known concurrent connect/close tests; after local spy isolation it passed.
+
+Manual retest checklist after committing, pushing, refreshing the Unity package lock, and restarting the MCP client:
+1. Confirm `ping.structuredContent.server.gitHead` matches the next commit.
+2. Refresh the Bottomless Well package lock to the next commit and force Unity package resolution.
+3. Confirm Unity no longer logs immutable package mutations for `Packages/com.unity.editor-mcp`, `Packages/com.unity.editor-mcp/package.json`, or `Packages/com.unity.editor-mcp/Editor/Tools`.
+4. Confirm Unity listener discovery recovers without requiring a manual `Assets > Refresh`; if it still does not, capture `Editor.log` timestamps around package resolution, assembly reload, `TCP listener started`, and registry writes.
+5. Confirm `AssetImportWorker` crashes do not recur during package refresh plus the Play/Screenshot/component-read flow.
+6. Run `npm test -- --runInBand` from `mcp-server` and confirm it stays green.
