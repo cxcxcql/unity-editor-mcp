@@ -11,7 +11,8 @@ export function isRecoverablePlayModeDisconnect(error) {
     error?.code === 'EPIPE' ||
     error?.code === 'NOT_CONNECTED' ||
     error?.code === 'CONNECTION_CLOSED' ||
-    error?.code === 'NO_UNITY_INSTANCE';
+    error?.code === 'NO_UNITY_INSTANCE' ||
+    error?.code === 'LOCAL_WORKSPACE_MISMATCH';
 }
 
 export async function recoverPlayModeState(unityConnection, message, options = {}) {
@@ -72,6 +73,12 @@ export async function waitForEditorState(unityConnection, predicate, options = {
     try {
       attempts++;
       const result = await unityConnection.sendCommand('get_editor_state', {});
+      if (result?.status === 'error') {
+        const error = new Error(result.error || 'Failed to get Unity editor state');
+        error.code = 'UNITY_ERROR';
+        throw error;
+      }
+
       const state = extractState(result);
       lastState = state;
 

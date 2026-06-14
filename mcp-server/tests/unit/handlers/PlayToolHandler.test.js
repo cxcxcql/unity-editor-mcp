@@ -244,6 +244,58 @@ describe('PlayToolHandler', () => {
       ]);
     });
 
+    it('should retry transient workspace mismatch errors during play mode reload', async () => {
+      const calls = [];
+      let connectAttempts = 0;
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {
+          calls.push(['connect']);
+          connectAttempts++;
+          if (connectAttempts < 3) {
+            const error = new Error('No Unity Editor MCP instance matches the current Unity workspace');
+            error.code = 'LOCAL_WORKSPACE_MISMATCH';
+            throw error;
+          }
+        }),
+        sendCommand: mock.fn(async (command, params) => {
+          calls.push([command, params]);
+          if (command === 'play_game') {
+            throw new Error('Connection closed');
+          }
+
+          return {
+            status: 'success',
+            state: {
+              isPlaying: true,
+              isPaused: false,
+              isCompiling: false,
+              isUpdating: false
+            }
+          };
+        })
+      };
+      handler = new PlayToolHandler(mockConnection);
+
+      const result = await handler.handle({}, {
+        playModeRecovery: {
+          timeoutMs: 100,
+          pollIntervalMs: 0
+        }
+      });
+
+      assert.equal(result.status, 'success');
+      assert.equal(result.result.recoveredAfterReconnect, true);
+      assert.equal(result.result.state.isPlaying, true);
+      assert.deepEqual(calls, [
+        ['play_game', {}],
+        ['connect'],
+        ['connect'],
+        ['connect'],
+        ['get_editor_state', {}]
+      ]);
+    });
+
     it('should return a structured timeout error when play mode cannot be verified', async () => {
       mockConnection = {
         isConnected: mock.fn(() => true),

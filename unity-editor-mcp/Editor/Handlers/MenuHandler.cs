@@ -203,6 +203,44 @@ namespace UnityEditorMCP.Handlers
                 bool executed = false;
                 bool knownMenuPath = IsKnownMenuPath(menuPath);
                 bool menuExists = knownMenuPath;
+                string recommendedTool = GetRecommendedTool(menuPath);
+
+                if (ShouldUseRecommendedTool(menuPath))
+                {
+                    var recommendedResult = new
+                    {
+                        success = true,
+                        menuPath = menuPath,
+                        executed = false,
+                        menuExists = true,
+                        executionTime = (int)(DateTime.UtcNow - startTime).TotalMilliseconds,
+                        validationStatus = "not_executed",
+                        reasonCode = "USE_RECOMMENDED_TOOL",
+                        editorState = CreateEditorStateDiagnostics(),
+                        recommendedTool = recommendedTool,
+                        message = $"Use the {recommendedTool} MCP tool for this editor action"
+                    };
+
+                    if (!string.IsNullOrEmpty(alias))
+                    {
+                        return new
+                        {
+                            recommendedResult.success,
+                            recommendedResult.menuPath,
+                            recommendedResult.executed,
+                            recommendedResult.menuExists,
+                            recommendedResult.executionTime,
+                            recommendedResult.validationStatus,
+                            recommendedResult.reasonCode,
+                            recommendedResult.editorState,
+                            recommendedResult.recommendedTool,
+                            recommendedResult.message,
+                            alias = alias
+                        };
+                    }
+
+                    return recommendedResult;
+                }
 
                 try
                 {
@@ -238,7 +276,7 @@ namespace UnityEditorMCP.Handlers
                     validationStatus = executed ? "executable" : menuExists ? "not_executed" : "not_found",
                     reasonCode = executed ? null : menuExists ? "EXECUTE_MENU_ITEM_FALSE" : "MENU_NOT_IN_KNOWN_LIST",
                     editorState = CreateEditorStateDiagnostics(),
-                    recommendedTool = GetRecommendedTool(menuPath),
+                    recommendedTool = recommendedTool,
                     message = executed 
                         ? "Menu item executed successfully" 
                         : menuExists 
@@ -430,6 +468,11 @@ namespace UnityEditorMCP.Handlers
             }
 
             return null;
+        }
+
+        private static bool ShouldUseRecommendedTool(string menuPath)
+        {
+            return string.Equals(menuPath, "Edit/Play", StringComparison.OrdinalIgnoreCase);
         }
 
         private static object CreateEditorStateDiagnostics()

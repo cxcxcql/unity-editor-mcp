@@ -125,13 +125,57 @@ describe('GetEditorStateToolHandler', () => {
       assert.equal(result.state.isPlaying, false);
     });
 
-    it('should throw error if not connected', async () => {
+    it('should connect before reading state when disconnected', async () => {
       mockConnection.isConnected.mock.mockImplementation(() => false);
-      
-      await assert.rejects(
-        async () => await handler.execute({}),
-        /Unity connection not available/
-      );
+
+      const result = await handler.execute({});
+
+      assert.equal(mockConnection.connect.mock.calls.length, 1);
+      assert.equal(result.state.isPlaying, false);
+    });
+
+    it('should retry recoverable listener handoff failures before returning state', async () => {
+      const calls = [];
+      let connectAttempts = 0;
+      mockConnection = {
+        isConnected: mock.fn(() => false),
+        connect: mock.fn(async () => {
+          calls.push(['connect']);
+          connectAttempts++;
+          if (connectAttempts === 1) {
+            const error = new Error('No Unity Editor MCP instance matches the current Unity workspace');
+            error.code = 'LOCAL_WORKSPACE_MISMATCH';
+            throw error;
+          }
+        }),
+        sendCommand: mock.fn(async (command, params) => {
+          calls.push([command, params]);
+          return {
+            status: 'success',
+            state: {
+              isPlaying: true,
+              isPaused: false,
+              isCompiling: false,
+              isUpdating: false
+            }
+          };
+        })
+      };
+      handler = new GetEditorStateToolHandler(mockConnection);
+
+      const result = await handler.execute({}, {
+        editorStateRecovery: {
+          timeoutMs: 100,
+          pollIntervalMs: 0
+        }
+      });
+
+      assert.equal(result.state.isPlaying, true);
+      assert.deepEqual(calls, [
+        ['connect'],
+        ['connect'],
+        ['get_editor_state', {}]
+      ]);
     });
   });
 

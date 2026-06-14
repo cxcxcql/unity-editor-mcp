@@ -447,21 +447,21 @@ namespace UnityEditorMCP.Handlers
         /// </summary>
         private static LogType GetLogTypeFromMode(int mode)
         {
-            if ((mode & (ModeBitError | ModeBitScriptingError | ModeBitException | ModeBitScriptingException)) != 0)
+            if ((mode & (ModeBitWarning | ModeBitScriptingWarning)) != 0)
             {
-                return LogType.Error;
+                return LogType.Warning;
             }
             else if ((mode & (ModeBitAssert | ModeBitScriptingAssertion)) != 0)
             {
                 return LogType.Assert;
             }
-            else if ((mode & (ModeBitWarning | ModeBitScriptingWarning)) != 0)
-            {
-                return LogType.Warning;
-            }
-            else if ((mode & ModeBitException) != 0)
+            else if ((mode & (ModeBitException | ModeBitScriptingException)) != 0)
             {
                 return LogType.Exception;
+            }
+            else if ((mode & (ModeBitError | ModeBitScriptingError)) != 0)
+            {
+                return LogType.Error;
             }
             else
             {

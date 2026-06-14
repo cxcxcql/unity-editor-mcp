@@ -158,7 +158,7 @@ namespace UnityEditorMCP.Core
                 {
                     if (currentPort == DEFAULT_PORT && primaryException.SocketErrorCode == SocketError.AddressAlreadyInUse)
                     {
-                        Debug.LogWarning($"[Unity Editor MCP] Port {DEFAULT_PORT} is already in use. Falling back to an available loopback port.");
+                        Debug.LogFormat(LogType.Warning, LogOption.NoStacktrace, null, "[Unity Editor MCP] Port {0} is already in use. Falling back to an available loopback port.", DEFAULT_PORT);
 
                         if (!TryStartTcpListener(0, out newListener, out boundPort, out SocketException fallbackException))
                         {

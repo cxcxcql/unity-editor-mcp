@@ -1,4 +1,7 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
+import { PLAY_MODE_POLL_INTERVAL_MS, waitForEditorState } from './playModeRecovery.js';
+
+const EDITOR_STATE_RECOVERY_TIMEOUT_MS = 10000;
 
 /**
  * Handler for getting Unity editor state
@@ -22,14 +25,23 @@ export class GetEditorStateToolHandler extends BaseToolHandler {
    * @param {object} params - Empty object for this command
    * @returns {Promise<object>} Editor state information
    */
-  async execute(params) {
-    // Ensure connected
-    if (!this.unityConnection.isConnected()) {
-      throw new Error('Unity connection not available');
-    }
-    
-    // Send get state command to Unity
-    const result = await this.unityConnection.sendCommand('get_editor_state', params);
+  async execute(params, context = {}) {
+    const verified = await waitForEditorState(
+      this.unityConnection,
+      () => true,
+      {
+        timeoutMs: context.editorStateRecovery?.timeoutMs ??
+          context.playModeRecovery?.timeoutMs ??
+          EDITOR_STATE_RECOVERY_TIMEOUT_MS,
+        pollIntervalMs: context.editorStateRecovery?.pollIntervalMs ??
+          context.playModeRecovery?.pollIntervalMs ??
+          PLAY_MODE_POLL_INTERVAL_MS,
+        timeoutCode: 'EDITOR_STATE_RECOVERY_TIMEOUT',
+        timeoutMessage: 'Timed out waiting for Unity editor state after reconnect',
+        connectBeforeFirstPoll: !this.unityConnection.isConnected()
+      }
+    );
+    const result = verified.result;
     
     // Check for Unity-side errors
     if (result.status === 'error') {

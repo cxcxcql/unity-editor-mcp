@@ -347,3 +347,97 @@ Manual retest checklist after restarting the MCP client:
 4. Call `get_editor_state` immediately after `play_game`; confirm it responds and reports the live Play Mode state.
 5. Call `stop_game`; confirm the returned state has `isPlaying: false`.
 6. Re-run the parallel component read scenario to confirm the single connection queue still serializes commands without choosing an asset-worker endpoint.
+
+## Retest After Main Update 3
+
+Retested: 2026-06-14
+MCP repo commit: `cd062eb72e811704140ce2c8624b6c0da327da02`
+Unity project package lock: `cd062eb72e811704140ce2c8624b6c0da327da02`
+Resolved package cache: `Library/PackageCache/com.unity.editor-mcp@19643bb097dd`
+Reported Unity package version: `0.15.5`
+Reported MCP server: `unity-editor-mcp` `1.4.0`, `gitHead: cd062eb`, pid `54993`
+
+Setup:
+- Local MCP repo `/Users/ozan/Projects/unity-mcp` was clean and matched `origin/main` at `cd062eb72e811704140ce2c8624b6c0da327da02`.
+- Unity package lock in `/Users/ozan/UnityProjects/Github/bottomless-well/Packages/packages-lock.json` was updated from `09b229294c4055d2d4f08c96f59246d3410f76d4` to `cd062eb72e811704140ce2c8624b6c0da327da02`.
+- Unity resolved the package to `Library/PackageCache/com.unity.editor-mcp@19643bb097dd`.
+- `ping`, `wait_for_compilation`, and `get_editor_state` worked before the Play Mode regression checks. Compilation reported zero errors/warnings and `lastCompilationTime: null`.
+
+Status summary:
+
+1. Server/source metadata: fixed.
+   - `ping` and `list_unity_instances` both reported server metadata with package `unity-editor-mcp`, version `1.4.0`, and `gitHead: cd062eb`.
+
+2. Discovery compactness and batch-worker filtering: improved.
+   - Default compact `list_unity_instances` selected the live non-batch Bottomless Well editor.
+   - Batch/stale records were summarized in `staleCounts` / `hiddenCounts` instead of dominating the output.
+   - After a Play Mode reload, discovery selected the new interactive editor endpoint on port `63509`, not the stale batch-mode port `6400`.
+
+3. `play_game` command result: still not fixed.
+   - From Edit Mode, `play_game` reproducibly returned `LOCAL_WORKSPACE_MISMATCH`.
+   - Despite the error response, Unity did enter Play Mode and registered a fresh listener on a new port.
+   - Immediate `get_editor_state` sometimes returned `Unity connection not available` during the listener handoff, but recovered after a short delay/serial retry.
+   - This is an improvement over raw `Connection closed`, but the command still reports failure while causing the state transition.
+
+4. Command path after Play Mode entry: improved.
+   - After the transient listener handoff, `ping` connected to the new endpoint and `get_editor_state` reported `isPlaying: true` with `isPlayerLoopAdvancing: true`.
+   - `capture_screenshot` with `captureMode: "game"` succeeded and saved `Assets/_Project/Screenshots/mcp-game-tool-regression-cd062.png`.
+
+5. Parallel component calls: fixed in this retest.
+   - Parallel `list_components` on `/GameRoot/WellRoot` and `get_component_values` for `WellController` both returned successfully.
+   - `get_component_values` returned the expected `State: Idle` and `IsBusy: false` values.
+
+6. `stop_game` final-state polling: fixed in this retest.
+   - `stop_game` returned success with `isPlaying: false`, `isPlayerLoopAdvancing: false`, `polledUntilFinalState: true`, and `attempts: 1`.
+   - A follow-up `get_editor_state` also reported Edit Mode.
+
+7. Menu failure diagnostics: improved but still noisy.
+   - `execute_menu_item` for `Edit/Play` returned structured fields: `validationStatus: "not_executed"`, `reasonCode: "EXECUTE_MENU_ITEM_FALSE"`, `editorState`, and `recommendedTool: "stop_game"`.
+   - The Unity console still logged this failed menu execution as error entries, including `ExecuteMenuItem failed because there is no menu named 'Edit/Play'`.
+
+8. Log filtering / classification: still has issues.
+   - After clearing the console before a clean Play/Stop cycle, `enhanced_read_logs` still reported MCP internal command-processing logs when `excludeMcpInternal: false`; this is expected for diagnostics but very noisy.
+   - The port fallback warning (`Port 6400 is already in use. Falling back to an available loopback port.`) was still returned with `logType: "Error"` even though it is logged through `Debug.LogWarning`.
+   - Stack traces for current MCP logs referenced the old package cache path `com.unity.editor-mcp@70b92bcf78fa`, even though the lock and current `Library/PackageCache` resolved to `com.unity.editor-mcp@19643bb097dd`. This may be stale compiled debug metadata or a Unity domain/package reload issue, but it complicates verification.
+
+Current remaining blockers from this retest:
+- `play_game` returns `LOCAL_WORKSPACE_MISMATCH` while still entering Play Mode.
+- Immediate state calls can transiently report `Unity connection not available` during the Play Mode listener handoff.
+- Warning/error log classification still mislabels at least the port fallback warning as an error.
+- Runtime MCP stack traces still point at the old package-cache path after the package lock resolves to the new commit.
+
+## Fix Iteration 4 Notes
+
+Root causes found after Retest After Main Update 3:
+- `play_game` entered Play Mode, then the Node recovery loop failed during the reload handoff because `LOCAL_WORKSPACE_MISMATCH` was treated as fatal. During domain/package reload this can be a transient discovery artifact, like `NO_UNITY_INSTANCE`.
+- `get_editor_state` still threw `Unity connection not available` before trying to reconnect, unlike most non-playmode handlers.
+- `execute_menu_item` for `Edit/Play` was a known recommended-tool alias, but Unity still invoked `EditorApplication.ExecuteMenuItem("Edit/Play")`, which caused Unity to emit an internal menu error.
+- Enhanced console log severity classification checked error/exception mode bits before warning bits. Unity warning entries can carry extra scripting bits, so expected warnings such as port fallback could be surfaced as errors.
+
+Implementation target:
+- Treat `LOCAL_WORKSPACE_MISMATCH` as recoverable only inside the Play Mode recovery polling path.
+- Make `get_editor_state` use the existing reconnect/poll helper so immediate state calls can survive listener handoff.
+- Short-circuit `Edit/Play` menu execution with `USE_RECOMMENDED_TOOL` diagnostics and avoid calling Unity's menu API for that alias.
+- Prefer warning mode bits in enhanced log classification and emit the expected port-fallback warning without a stack trace.
+
+Verification completed locally:
+- Added failing Node regression tests for Play Mode recovery through `LOCAL_WORKSPACE_MISMATCH` and `get_editor_state` reconnecting through transient handoff failures.
+- `node --test tests/unit/handlers/PlayToolHandler.test.js tests/unit/handlers/GetEditorStateToolHandler.test.js tests/unit/handlers/StopToolHandler.test.js tests/unit/handlers/PauseToolHandler.test.js`
+- `npm run test:unit`
+- `npm run test:ci`
+- `git diff --check`
+- Live Bottomless Well check using the local Node handlers:
+  - `play_game` recovered after Unity closed the first socket and returned verified `state.isPlaying: true`.
+  - immediate `get_editor_state` after `play_game` returned Play Mode state with `isPlayerLoopAdvancing: true`.
+  - `stop_game` returned verified `state.isPlaying: false`.
+
+Unity-side verification status:
+- Added focused Unity EditMode regression tests for `Edit/Play` recommended-tool diagnostics and enhanced log warning classification.
+- These Unity-side changes require the Bottomless Well project to refresh to the next package commit before live MCP retesting; the currently open project is still using the previous package cache while this fix is uncommitted.
+
+Manual retest checklist after committing, pushing, and refreshing the Unity package lock:
+1. Restart the MCP client and confirm `ping.structuredContent.server.gitHead` matches the next commit.
+2. Call `play_game`; confirm it returns success, not `LOCAL_WORKSPACE_MISMATCH`, with verified `state.isPlaying: true`.
+3. Immediately call `get_editor_state`; confirm it reconnects if needed and returns the live Play Mode state.
+4. Call `execute_menu_item` for `Edit/Play`; confirm it returns `reasonCode: "USE_RECOMMENDED_TOOL"` and does not add Unity console errors about a missing `Edit/Play` menu.
+5. Trigger or inspect the port fallback warning; confirm enhanced logs classify it as `Warning`, not `Error`.
