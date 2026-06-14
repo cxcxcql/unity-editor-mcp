@@ -10,7 +10,8 @@ export function isRecoverablePlayModeDisconnect(error) {
     error?.code === 'ECONNRESET' ||
     error?.code === 'EPIPE' ||
     error?.code === 'NOT_CONNECTED' ||
-    error?.code === 'CONNECTION_CLOSED';
+    error?.code === 'CONNECTION_CLOSED' ||
+    error?.code === 'NO_UNITY_INSTANCE';
 }
 
 export async function recoverPlayModeState(unityConnection, message, options = {}) {

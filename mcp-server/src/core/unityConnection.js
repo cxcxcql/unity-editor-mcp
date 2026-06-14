@@ -154,6 +154,7 @@ export class UnityConnection extends EventEmitter {
         this.connected = false;
         const wasSocket = this.socket;
         this.socket = null;
+        this.endpoint = null;
         
         // Clear message buffer
         this.messageBuffer = Buffer.alloc(0);

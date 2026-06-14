@@ -74,6 +74,31 @@ describe('Unity discovery', () => {
     assert.equal(instances[0].port, 50123);
   });
 
+  it('excludes batch-mode asset workers from default live registry reads', async () => {
+    const projectPath = path.join(tempDir, 'Project');
+    await writeInstance('editor.json', {
+      projectPath,
+      pid: process.pid,
+      port: 50123,
+      isBatchMode: false,
+      packageVersion: '0.15.5',
+      lastSeen: new Date().toISOString()
+    });
+    await writeInstance('asset-worker.json', {
+      projectPath,
+      pid: process.pid,
+      port: 50124,
+      isBatchMode: true,
+      packageVersion: 'unknown',
+      lastSeen: new Date(Date.now() + 1000).toISOString()
+    });
+
+    const instances = await readUnityInstances({ registryDir, staleAfterMs: 30000 });
+
+    assert.equal(instances.length, 1);
+    assert.equal(instances[0].port, 50123);
+  });
+
   it('selects the instance matching an explicit project path', async () => {
     const projectA = path.join(tempDir, 'ProjectA');
     const projectB = path.join(tempDir, 'ProjectB');
@@ -86,6 +111,30 @@ describe('Unity discovery', () => {
 
     assert.equal(selection.instance.projectPath, projectB);
     assert.equal(selection.reason, 'explicit project path');
+  });
+
+  it('prefers an interactive editor over a fresher batch-mode exact project match', () => {
+    const projectPath = path.join(tempDir, 'Project');
+    const instances = [
+      {
+        ...createInstance(projectPath, 6400),
+        instanceId: 'asset-worker',
+        isBatchMode: true,
+        packageVersion: 'unknown',
+        lastSeen: new Date(Date.now() + 1000).toISOString()
+      },
+      {
+        ...createInstance(projectPath, 50123),
+        instanceId: 'editor',
+        isBatchMode: false,
+        packageVersion: '0.15.5'
+      }
+    ];
+
+    const selection = selectUnityInstance(instances, { projectPath });
+
+    assert.equal(selection.instance.instanceId, 'editor');
+    assert.equal(selection.instance.port, 50123);
   });
 
   it('selects the instance matching an explicit instance ID', () => {
@@ -278,6 +327,17 @@ describe('Unity discovery', () => {
     );
   });
 
+  it('marks explicit selector misses with NO_UNITY_INSTANCE for transient reload recovery', () => {
+    assert.throws(
+      () => selectUnityInstance([], { projectPath: path.join(tempDir, 'MissingProject') }),
+      (error) => {
+        assert.equal(error.code, 'NO_UNITY_INSTANCE');
+        assert.match(error.message, /No Unity Editor MCP instance found for project/);
+        return true;
+      }
+    );
+  });
+
   it('falls back to the default port when no registry entries exist', async () => {
     const endpoint = await resolveUnityEndpoint({
       unityConfig: {
@@ -383,6 +443,46 @@ describe('Unity discovery', () => {
     assert.equal(endpoint.port, 50123);
     assert.equal(endpoint.reason, 'stale exact project path');
     assert.equal(endpoint.instance.stale, true);
+  });
+
+  it('does not promote a stale batch-mode exact project match during reload', async () => {
+    const projectPath = path.join(tempDir, 'ReloadingProject');
+    await writeInstance('asset-worker.json', {
+      instanceId: 'asset-worker',
+      projectPath,
+      pid: process.pid,
+      port: 6400,
+      isBatchMode: true,
+      packageVersion: 'unknown',
+      lastSeen: new Date(Date.now() - 120000).toISOString()
+    });
+    await writeInstance('editor.json', {
+      instanceId: 'editor',
+      projectPath,
+      pid: process.pid,
+      port: 50123,
+      isBatchMode: false,
+      packageVersion: '0.15.5',
+      lastSeen: new Date().toISOString()
+    });
+
+    const endpoint = await resolveUnityEndpoint({
+      unityConfig: {
+        host: 'localhost',
+        port: 6400,
+        hasExplicitPort: false,
+        discovery: {
+          registryDir,
+          enabled: true,
+          projectPath
+        }
+      },
+      canConnectToPort: async (host, port) => port === 6400 || port === 50123,
+      cwd: tempDir
+    });
+
+    assert.equal(endpoint.port, 50123);
+    assert.equal(endpoint.instance.instanceId, 'editor');
   });
 
   it('uses explicit port without discovery', async () => {

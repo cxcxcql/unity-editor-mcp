@@ -33,7 +33,7 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
           compact: {
             type: 'boolean',
             description: 'Return a compact report with the selected endpoint and relevant live conflicts only',
-            default: false
+            default: true
           },
           includeStale: {
             type: 'boolean',
@@ -93,6 +93,7 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
         packageVersion: instance.packageVersion,
         status: instance.status,
         activeScene: instance.activeScene,
+        isBatchMode: instance.isBatchMode,
         lastSeen: instance.lastSeen,
         alive: instance.alive,
         stale: instance.stale
@@ -105,7 +106,7 @@ function createCompactReport(report, includeStale) {
   const selected = summarizeEndpoint(report.endpoint);
   const selectedProjectPath = selected?.projectPath || report.targetProjectPath;
   const instances = report.instances
-    .filter((instance) => includeStale || (instance.alive && !instance.stale))
+    .filter((instance) => includeStale || (instance.alive && !instance.stale && instance.isBatchMode !== true))
     .filter((instance) => !selectedProjectPath || instance.projectPath === selectedProjectPath)
     .map((instance) => summarizeInstance(instance, selected?.instanceId));
 
@@ -120,7 +121,8 @@ function createCompactReport(report, includeStale) {
     selectionErrorCode: report.errorCode,
     instances,
     conflicts: instances.filter((instance) => instance.recommended !== true),
-    staleCounts: countStaleInstances(report.instances)
+    staleCounts: countStaleInstances(report.instances),
+    hiddenCounts: countHiddenInstances(report.instances)
   };
 }
 
@@ -154,6 +156,7 @@ function summarizeInstance(instance, selectedInstanceId) {
     unityVersion: instance.unityVersion,
     packageVersion: instance.packageVersion,
     activeScene: instance.activeScene,
+    isBatchMode: instance.isBatchMode,
     alive: instance.alive,
     stale: instance.stale,
     recommended: instance.instanceId === selectedInstanceId
@@ -175,4 +178,24 @@ function countStaleInstances(instances) {
   }
 
   return { total, byProject };
+}
+
+function countHiddenInstances(instances) {
+  const byProject = {};
+  let batchMode = 0;
+  let staleOrDead = 0;
+
+  for (const instance of instances) {
+    if (instance.isBatchMode === true) {
+      batchMode++;
+      const key = instance.projectName || instance.projectPath || '(unknown project)';
+      byProject[key] = (byProject[key] || 0) + 1;
+    }
+
+    if (instance.stale || !instance.alive) {
+      staleOrDead++;
+    }
+  }
+
+  return { batchMode, staleOrDead, byProject };
 }

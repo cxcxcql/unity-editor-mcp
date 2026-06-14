@@ -303,6 +303,13 @@ describe('UnityConnection', () => {
     it('should reject queued commands when the active connection closes', async () => {
       const firstPromise = connection.sendCommand('list_components', { path: '/Player' });
       const secondPromise = connection.sendCommand('get_component_values', { path: '/Player' });
+      connection.endpoint = {
+        host: '127.0.0.1',
+        port: 6400,
+        instance: {
+          instanceId: 'stale-before-play-mode'
+        }
+      };
 
       assert.equal(mockSocket.write.mock.calls.length, 1);
       assert.equal(connection.commandQueue.length, 1);
@@ -318,6 +325,7 @@ describe('UnityConnection', () => {
         /Connection closed/
       );
       assert.equal(connection.commandQueue.length, 0);
+      assert.equal(connection.endpoint, null);
     });
   });
 

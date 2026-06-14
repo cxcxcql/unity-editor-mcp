@@ -262,6 +262,41 @@ Current remaining blockers from this retest:
 - Discovery result cleanup/compactness.
 - Menu failure diagnostics.
 
+## Retest After Main Update 2
+
+Retested: 2026-06-14
+Unity project package lock: `09b229294c4055d2d4f08c96f59246d3410f76d4`
+Resolved package cache: `Library/PackageCache/com.unity.editor-mcp@70b92bcf78fa`
+Reported package version: `0.15.5`
+
+Setup:
+- Local MCP repo `/Users/ozan/Projects/unity-mcp` was already at `09b229294c4055d2d4f08c96f59246d3410f76d4`; `git pull --ff-only` returned `Already up to date`.
+- Unity package lock in `/Users/ozan/UnityProjects/Github/bottomless-well/Packages/packages-lock.json` was updated from `8b624273f40b51c90c5e84f3be0102841cd15976` to `09b229294c4055d2d4f08c96f59246d3410f76d4`.
+- Unity refreshed cleanly and `wait_for_compilation` returned zero errors/warnings with `lastCompilationTime: null`.
+
+Status summary:
+
+1. `play_game` connection-close error: still not fixed.
+   - `play_game` returned `TOOL_ERROR` / `Connection closed`.
+   - The Unity Editor log shows MCP internally processed command `play_game` and sent a success response with message `Entered play mode`, but the tool client still received a connection-closed error.
+
+2. Command path after Play Mode entry: regressed / blocking.
+   - After reconnecting to the new endpoint, `get_editor_state`, `ping`, and `stop_game` all timed out.
+   - Registry discovery continued to show the instance as alive and `lastSeen` continued updating.
+   - Unity menu inspection showed the editor was back in Edit Mode after using `Edit > Play Mode > Play`, but MCP commands still timed out.
+   - Triggering `Assets > Refresh` through Unity UI did not recover the MCP command path.
+
+3. Registry/discovery output: still noisy.
+   - `list_unity_instances` still returned stale/duplicate current-project asset-worker entries and old project records.
+
+4. Further checks blocked.
+   - Could not retest Game View screenshot, parallel component calls, log filtering, or `stop_game` final-state behavior after the latest update because the MCP command path remained wedged after Play Mode entry.
+
+Immediate suspected problem:
+- The latest package can accept TCP clients and update the registry heartbeat, but after the Play Mode transition it does not process/respond to normal commands.
+- The Editor log shows accepted client connections after the transition without corresponding `Received command` / `Processing command` / `Sending response` entries for timed-out client calls.
+
+
 ## Fix Iteration 2 Checklist
 
 Implementation target:
@@ -280,3 +315,35 @@ Manual retest checklist after this iteration:
 5. Run parallel `list_components` and `get_component_values` and confirm both return or fail independently without hanging until the client timeout.
 6. Call default `list_unity_instances` and confirm it is compact, selected-endpoint focused, and shows stale counts instead of full stale records.
 7. Call `execute_menu_item` for `Edit/Play` and confirm diagnostics include `validationStatus`, `reasonCode`, `editorState`, and `recommendedTool`.
+
+## Fix Iteration 3 Notes
+
+Root cause found after Retest After Main Update 2:
+- During Play Mode reload, Unity asset import worker processes registered as MCP instances with `isBatchMode: true`, `packageVersion: "unknown"`, and fresh heartbeats.
+- Discovery could select or promote those batch-mode worker endpoints during reconnect. They accepted TCP connections but did not process normal MCP commands, which matched the observed post-play command timeouts.
+- Recovery also treated explicit project-path discovery gaps during reload as fatal instead of retryable.
+
+Implementation target:
+- Exclude batch-mode registry entries from default discovery selection and stale exact-match promotion.
+- Keep `includeStale: true` / `compact: false` available for diagnostics, but hide batch-mode entries from default compact output and summarize them in `hiddenCounts`.
+- Mark explicit selector misses as `NO_UNITY_INSTANCE` so Play Mode recovery keeps polling through the transient registry gap.
+- Clear cached endpoint metadata when an established socket closes so reconnects rediscover the current editor endpoint.
+
+Verification completed locally:
+- `node --test tests/unit/core/unityDiscovery.test.js tests/unit/handlers/PlayToolHandler.test.js tests/unit/core/unityConnection.test.js tests/unit/handlers/ListUnityInstancesToolHandler.test.js`
+- `npm run test:unit`
+- `npm run test:ci`
+- `git diff --check`
+- Live Bottomless Well play/stop script:
+  - selected `isBatchMode: false`, `packageVersion: "0.15.5"` endpoint.
+  - `play_game` recovered through a transient `NO_UNITY_INSTANCE` reconnect gap and returned verified `state.isPlaying: true`.
+  - `stop_game` returned verified `state.isPlaying: false`.
+  - default compact `list_unity_instances` showed only the interactive Bottomless Well editor and summarized hidden batch/stale records.
+
+Manual retest checklist after restarting the MCP client:
+1. Call `ping` and confirm `structuredContent.server.gitHead` matches the next commit.
+2. Call default `list_unity_instances`; confirm it lists one live interactive Bottomless Well instance, no full stale old-project records, and `hiddenCounts.batchMode > 0` if asset workers are present.
+3. Call `play_game`; confirm it returns success with verified `state.isPlaying: true`, even if Unity reloads the MCP package and closes the first socket.
+4. Call `get_editor_state` immediately after `play_game`; confirm it responds and reports the live Play Mode state.
+5. Call `stop_game`; confirm the returned state has `isPlaying: false`.
+6. Re-run the parallel component read scenario to confirm the single connection queue still serializes commands without choosing an asset-worker endpoint.

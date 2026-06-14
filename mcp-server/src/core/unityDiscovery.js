@@ -133,8 +133,9 @@ export async function readUnityInstances(options = {}) {
       const lastSeenMs = Date.parse(data.lastSeen);
       const stale = !Number.isFinite(lastSeenMs) || now - lastSeenMs > staleAfterMs;
       const alive = isProcessAlive(data.pid);
+      const batchMode = data.isBatchMode === true;
 
-      if (!includeStale && (stale || !alive)) {
+      if (!includeStale && (stale || !alive || batchMode)) {
         continue;
       }
 
@@ -156,7 +157,9 @@ export async function readUnityInstances(options = {}) {
 }
 
 export function selectUnityInstance(instances, options = {}) {
-  const liveInstances = instances.filter((instance) => (!instance.stale && instance.alive) || instance.staleExactMatch);
+  const liveInstances = instances.filter((instance) =>
+    isSelectableInstance(instance) && ((!instance.stale && instance.alive) || instance.staleExactMatch)
+  );
   const explicitInstanceId = normalizeSelector(options.instanceId);
   const explicitProjectPath = normalizeProjectPath(options.projectPath);
   const explicitWorkspaceId = normalizeSelector(options.workspaceId);
@@ -176,7 +179,7 @@ export function selectUnityInstance(instances, options = {}) {
       };
     }
 
-    throw new Error(
+    throw createNoUnityInstanceError(
       `No Unity Editor MCP instance found for instance ID: ${explicitInstanceId}\n\n` +
       formatInstanceCandidates(liveInstances)
     );
@@ -194,7 +197,7 @@ export function selectUnityInstance(instances, options = {}) {
       };
     }
 
-    throw new Error(
+    throw createNoUnityInstanceError(
       `No Unity Editor MCP instance found for project: ${explicitProjectPath}\n\n` +
       formatInstanceCandidates(liveInstances)
     );
@@ -209,7 +212,7 @@ export function selectUnityInstance(instances, options = {}) {
       };
     }
 
-    throw new Error(
+    throw createNoUnityInstanceError(
       `No Unity Editor MCP instance found for workspace ID: ${explicitWorkspaceId}\n\n` +
       formatInstanceCandidates(liveInstances)
     );
@@ -544,7 +547,7 @@ function normalizeHost(host) {
 async function promoteConnectableExactMatches(instances, options) {
   const promoted = [];
   for (const instance of instances) {
-    if (!instance.stale || !instance.alive || !isExactSelectorMatch(instance, options)) {
+    if (!isSelectableInstance(instance) || !instance.stale || !instance.alive || !isExactSelectorMatch(instance, options)) {
       promoted.push(instance);
       continue;
     }
@@ -563,6 +566,10 @@ async function promoteConnectableExactMatches(instances, options) {
   }
 
   return promoted;
+}
+
+function isSelectableInstance(instance) {
+  return instance?.isBatchMode !== true;
 }
 
 function isExactSelectorMatch(instance, options) {
@@ -683,6 +690,12 @@ function createLocalWorkspaceMismatchError(localWorkspace, projectPath, workspac
   );
   error.code = 'LOCAL_WORKSPACE_MISMATCH';
   error.candidates = candidates;
+  return error;
+}
+
+function createNoUnityInstanceError(message) {
+  const error = new Error(message);
+  error.code = 'NO_UNITY_INSTANCE';
   return error;
 }
 

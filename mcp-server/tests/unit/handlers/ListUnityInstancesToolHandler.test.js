@@ -42,6 +42,7 @@ describe('ListUnityInstancesToolHandler', () => {
     assert.equal(handler.inputSchema.properties.workspaceId.type, 'string');
     assert.equal(handler.inputSchema.properties.allowSingleInstanceFallback.type, 'boolean');
     assert.equal(handler.inputSchema.properties.compact.type, 'boolean');
+    assert.equal(handler.inputSchema.properties.compact.default, true);
     assert.equal(handler.inputSchema.properties.includeStale.type, 'boolean');
   });
 
@@ -100,6 +101,16 @@ describe('ListUnityInstancesToolHandler', () => {
       port: 50124,
       lastSeen: new Date().toISOString()
     });
+    await writeInstance('asset-worker.json', {
+      instanceId: 'asset-worker',
+      projectPath,
+      projectName: 'Project',
+      workspaceId: 'workspace-asset-worker',
+      port: 6400,
+      isBatchMode: true,
+      packageVersion: 'unknown',
+      lastSeen: new Date(Date.now() + 2000).toISOString()
+    });
     await writeInstance('stale.json', {
       instanceId: 'stale',
       projectPath: path.join(tempDir, 'OldProject'),
@@ -126,6 +137,8 @@ describe('ListUnityInstancesToolHandler', () => {
     assert.equal(result.conflicts[0].instanceId, 'conflict');
     assert.equal(result.staleCounts.total, 1);
     assert.equal(result.staleCounts.byProject.OldProject, 1);
+    assert.equal(result.hiddenCounts.batchMode, 1);
+    assert.equal(result.hiddenCounts.byProject.Project, 1);
   });
 
   it('preserves full verbose output when compact is false', async () => {
@@ -135,14 +148,33 @@ describe('ListUnityInstancesToolHandler', () => {
       projectPath,
       projectName: 'Project',
       workspaceId: 'workspace-selected',
-      port: 50123
+      port: 50123,
+      isBatchMode: false
+    });
+    await writeInstance('asset-worker.json', {
+      instanceId: 'asset-worker',
+      projectPath,
+      projectName: 'Project',
+      workspaceId: 'workspace-asset-worker',
+      port: 6400,
+      isBatchMode: true,
+      packageVersion: 'unknown',
+      lastSeen: new Date(Date.now() + 1000).toISOString()
     });
 
     const result = await handler.execute({ projectPath, compact: false });
 
     assert.equal(result.compact, undefined);
-    assert.equal(result.instances.length, 1);
-    assert.equal(result.instances[0].instanceId, 'selected');
+    assert.equal(result.instances.length, 2);
+    assert.deepEqual(
+      result.instances
+        .map((instance) => [instance.instanceId, instance.isBatchMode])
+        .sort(([left], [right]) => left.localeCompare(right)),
+      [
+        ['asset-worker', true],
+        ['selected', false]
+      ]
+    );
     assert.equal(result.selectedEndpoint.source, 'discovery');
   });
 
