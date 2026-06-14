@@ -447,7 +447,7 @@ Manual retest checklist after committing, pushing, and refreshing the Unity pack
 Retested: 2026-06-14
 MCP repo commit: `666ef0eaa8459e55ca38b16471af0deceb6e8f5b`
 Unity project package lock: `666ef0eaa8459e55ca38b16471af0deceb6e8f5b`
-Resolved package cache: `Library/PackageCache/com.unity.editor-mcp@2de6ad95343f`
+Resolved package cache after final Unity refresh: `Library/PackageCache/com.unity.editor-mcp@6ea1473eaf78`
 Reported Unity package version: `0.15.5`
 Reported MCP server from direct handler run: `unity-editor-mcp` `1.4.0`, `gitHead: 666ef0e`
 
@@ -549,3 +549,101 @@ Manual retest checklist after committing, pushing, refreshing the Unity package 
 
 Known remaining non-code retest constraint:
 - Existing Codex MCP stdio processes still need a client/session restart to load the newly pushed server commit; this iteration adds source metadata and fixes server behavior, but it does not change Codex host process lifecycle.
+
+## Retest After Main Update 5
+
+Retested: 2026-06-14
+MCP repo commit: `5b638e1ab10050b30e54014225068da4b0795617`
+Unity project package lock: `5b638e1ab10050b30e54014225068da4b0795617`
+Resolved package cache after final Unity refresh: `Library/PackageCache/com.unity.editor-mcp@6ea1473eaf78`
+Reported Unity package version: `0.15.5`
+Reported MCP server from direct handler run: `unity-editor-mcp` `1.4.0`, `gitHead: 5b638e1`
+
+Setup:
+- Local MCP repo `/Users/ozan/Projects/unity-mcp` matched `origin/main` at `5b638e1ab10050b30e54014225068da4b0795617`.
+- The Bottomless Well lock file was updated from `666ef0eaa8459e55ca38b16471af0deceb6e8f5b` to `5b638e1ab10050b30e54014225068da4b0795617`.
+- Unity refreshed cleanly and reported zero compile errors/warnings.
+- Unity ultimately resolved the package to `com.unity.editor-mcp@6ea1473eaf78`. The relevant fixes in this iteration are Node server-side.
+- The Codex-hosted MCP tool transport was still closed (`Transport closed`) after the previous retest killed the stale stdio server process, so live retests were again run through the pulled repo's Node handler modules directly against the Unity TCP bridge.
+
+Automated checks run in this pass:
+- `node --test tests/unit/core/unityConnection.test.js tests/unit/handlers/CaptureScreenshotToolHandler.test.js tests/unit/handlers/PlayToolHandler.test.js tests/unit/handlers/GetEditorStateToolHandler.test.js`
+- Result: 61 passed, 0 failed, 1 skipped.
+- This includes the two previously failing `unityConnection` tests:
+  - `should share one in-flight connection attempt between concurrent callers`
+  - `should reject if the socket closes before connect completes`
+- The full `npm test -- --runInBand` suite was not rerun in this pass to avoid further loading the already overloaded desktop; the targeted failure and live regression paths were covered.
+
+Status summary:
+
+1. Server/source metadata: fixed in direct handler run.
+   - `list_unity_instances` and `ping` both reported `gitHead: 5b638e1`.
+   - Discovery selected the non-batch Bottomless Well editor endpoint and continued summarizing stale/batch entries through `hiddenCounts`.
+
+2. `play_game` command result: fixed in this retest.
+   - `play_game` returned success: `Entered play mode after reconnect`.
+   - Recovery survived the initial socket close, a transient `LOCAL_WORKSPACE_MISMATCH`, and two short `get_editor_state` command timeouts.
+   - Final verified state had `isPlaying: true`.
+   - Immediate follow-up `get_editor_state` returned `isPlaying: true` and `isPlayerLoopAdvancing: true`.
+
+3. Screenshot timeout / late-response poisoning: fixed in this retest.
+   - `capture_screenshot` in Play Mode used the extended `90000ms` timeout and returned success in about 9.5 seconds.
+   - Screenshot saved: `Assets/_Project/Screenshots/mcp-game-tool-regression-5b638e1.png`.
+   - No late-response/invalid-frame poisoning occurred after the screenshot command.
+
+4. Parallel component/log reads after screenshot: fixed in this retest.
+   - Parallel `list_components`, `get_component_values`, and `enhanced_read_logs` all returned successfully after screenshot capture.
+   - `list_components` found `Transform`, `SpriteRenderer`, `BoxCollider2D`, and `WellController`.
+   - `get_component_values` returned `State: Idle` and `IsBusy: false`.
+
+5. `stop_game` final-state polling: fixed in this retest.
+   - `stop_game` returned success with `isPlaying: false`, `isPlayerLoopAdvancing: false`, `polledUntilFinalState: true`, `attempts: 1`.
+   - Follow-up `get_editor_state` also reported Edit Mode.
+
+6. New Unity-side log findings during the run.
+   - `enhanced_read_logs` returned 6 warning/error/exception entries after screenshot and component reads:
+     - `Ignoring depth surface store action as it is memoryless`
+     - `Ignoring depth surface load action as it is memoryless`
+     - Immutable package warning/exception: `Packages/com.unity.editor-mcp/package.json` and `Packages/com.unity.editor-mcp` were reported as unexpectedly altered.
+     - Missing package folder metadata warning/error: `Packages/com.unity.editor-mcp/Editor/Tools/Scene` was recreated from a `.meta`.
+     - `AssetImportWorker0` crashed.
+     - `AssetImportWorker4` crashed.
+   - These did not break the MCP command stream in this run, but they should be investigated separately because they indicate Unity package/cache/import-worker instability.
+
+Current remaining blockers from this retest:
+- Codex MCP stdio transport still does not recover/rebind inside the current Codex session after the stale server process is terminated.
+- Unity logged immutable package/cache mutation and missing-folder metadata errors for `com.unity.editor-mcp`.
+- Unity asset import workers crashed during the retest.
+- Full `npm test -- --runInBand` was not rerun in this pass due machine load; targeted unit tests and live regression checks passed.
+
+## Fix Iteration 6 Notes
+
+Root causes found after Retest After Main Update 5:
+- The package contained a tracked empty-folder metadata file: `unity-editor-mcp/Editor/Tools/Scene.meta`.
+- The corresponding `Editor/Tools/Scene` folder had no tracked content. Git package resolution can include the `.meta` without a real folder payload, so Unity recreates the missing folder under `PackageCache` and then reports immutable package/package metadata mutation.
+- The asset import worker crashes happened in the same run as the package-cache mutation. This iteration removes the package-layout trigger and adds a regression test; the crashes still need one more Unity refresh retest to confirm they disappear.
+- The full `npm test -- --runInBand` gap was verification debt, not a separate product bug.
+- The Codex MCP stdio transport lifecycle is still outside this repo's runtime control: once the hosting client keeps or kills an already-started stdio server, the MCP server cannot force the client to reinitialize it from new source code. The supported mitigation remains restarting the MCP client/session and using `ping.structuredContent.server.gitHead` to confirm the loaded commit.
+
+Implementation target:
+- Remove the orphan tracked `unity-editor-mcp/Editor/Tools/Scene.meta`.
+- Add a Node package-layout regression test that fails when the Unity package tracks folder `.meta` files for empty package directories.
+- Re-run the full `npm test -- --runInBand` verification that was skipped in the previous retest.
+
+Verification completed locally:
+- `node --test tests/unit/core/packageLayout.test.js` failed before the fix with `unity-editor-mcp/Editor/Tools/Scene.meta`.
+- `node --test tests/unit/core/packageLayout.test.js`
+- `npm run test:unit`
+- `npm test -- --runInBand`
+- `npm run test:ci`
+
+Manual retest checklist after committing, pushing, refreshing the Unity package lock, and restarting the MCP client:
+1. Confirm `ping.structuredContent.server.gitHead` matches the next commit.
+2. Refresh the Bottomless Well package lock to the next commit and force Unity package resolution.
+3. Confirm Unity no longer logs immutable package mutations for `Packages/com.unity.editor-mcp/package.json` or `Packages/com.unity.editor-mcp`.
+4. Confirm Unity no longer logs recreation of `Packages/com.unity.editor-mcp/Editor/Tools/Scene` from a `.meta`.
+5. Confirm `AssetImportWorker` crashes do not recur during package refresh plus the Play/Screenshot/component-read flow.
+6. Run `npm test -- --runInBand` from `mcp-server` and confirm it stays green.
+
+Known remaining non-code retest constraint:
+- Restart the MCP client/session after pulling the next commit; a running stale stdio MCP process cannot be re-bound by repository changes alone.
