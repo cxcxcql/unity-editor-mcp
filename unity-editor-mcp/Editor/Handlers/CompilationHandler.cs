@@ -134,7 +134,7 @@ namespace UnityEditorMCP.Handlers
                     isCompiling = isCompiling,
                     isUpdating = isUpdating,
                     isMonitoring = isMonitoring,
-                    lastCompilationTime = lastCompilationTime.ToString("o"),
+                    lastCompilationTime = lastCompilationTime == DateTime.MinValue ? null : lastCompilationTime.ToString("o"),
                     messageCount = uniqueMessages.Count,
                     errorCount = uniqueMessages.Count(m => m.type == "Error"),
                     warningCount = uniqueMessages.Count(m => m.type == "Warning")

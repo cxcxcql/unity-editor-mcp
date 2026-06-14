@@ -119,15 +119,27 @@ namespace UnityEditorMCP.Handlers
 
         private static JObject GetEditorState()
         {
+            bool isPlaying = EditorApplication.isPlaying;
+            bool isPaused = EditorApplication.isPaused;
+            int frameCount = Time.frameCount;
+            float time = Time.time;
+            float realtimeSinceStartup = Time.realtimeSinceStartup;
+            float timeScale = Time.timeScale;
+
             return new JObject
             {
-                ["isPlaying"] = EditorApplication.isPlaying,
-                ["isPaused"] = EditorApplication.isPaused,
+                ["isPlaying"] = isPlaying,
+                ["isPaused"] = isPaused,
                 ["isCompiling"] = EditorApplication.isCompiling,
                 ["isUpdating"] = EditorApplication.isUpdating,
                 ["applicationPath"] = EditorApplication.applicationPath,
                 ["applicationContentsPath"] = EditorApplication.applicationContentsPath,
-                ["timeSinceStartup"] = EditorApplication.timeSinceStartup
+                ["timeSinceStartup"] = EditorApplication.timeSinceStartup,
+                ["frameCount"] = frameCount,
+                ["time"] = time,
+                ["realtimeSinceStartup"] = realtimeSinceStartup,
+                ["timeScale"] = timeScale,
+                ["isPlayerLoopAdvancing"] = isPlaying && !isPaused ? frameCount > 1 && time > 0f : false
             };
         }
 

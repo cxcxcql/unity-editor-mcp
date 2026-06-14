@@ -28,6 +28,16 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
           allowSingleInstanceFallback: {
             type: 'boolean',
             description: 'Allow selecting the only live Unity instance even when it does not match the current workspace'
+          },
+          compact: {
+            type: 'boolean',
+            description: 'Return a compact report with the selected endpoint and relevant live conflicts only',
+            default: false
+          },
+          includeStale: {
+            type: 'boolean',
+            description: 'Include stale or dead registry entries in compact output',
+            default: false
           }
         },
         required: []
@@ -53,6 +63,10 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
       unityConfig,
       cwd: process.cwd()
     }));
+
+    if (params.compact === true) {
+      return createCompactReport(report, params.includeStale === true);
+    }
 
     return {
       registryDir: report.registryDir,
@@ -83,4 +97,61 @@ export class ListUnityInstancesToolHandler extends BaseToolHandler {
       }))
     };
   }
+}
+
+function createCompactReport(report, includeStale) {
+  const selected = summarizeEndpoint(report.endpoint);
+  const selectedProjectPath = selected?.projectPath || report.targetProjectPath;
+  const instances = report.instances
+    .filter((instance) => includeStale || (instance.alive && !instance.stale))
+    .filter((instance) => !selectedProjectPath || instance.projectPath === selectedProjectPath)
+    .map((instance) => summarizeInstance(instance, selected?.instanceId));
+
+  return {
+    compact: true,
+    registryDir: report.registryDir,
+    targetProjectPath: report.targetProjectPath,
+    targetWorkspaceId: report.targetWorkspaceId,
+    selectedEndpoint: selected,
+    selectionError: report.error,
+    selectionErrorCode: report.errorCode,
+    instances,
+    conflicts: instances.filter((instance) => instance.recommended !== true)
+  };
+}
+
+function summarizeEndpoint(endpoint) {
+  if (!endpoint) {
+    return null;
+  }
+
+  return {
+    host: endpoint.host,
+    port: endpoint.port,
+    source: endpoint.source,
+    reason: endpoint.reason,
+    projectPath: endpoint.projectPath || endpoint.instance?.projectPath,
+    instanceId: endpoint.instance?.instanceId,
+    workspaceId: endpoint.instance?.workspaceId,
+    packageVersion: endpoint.instance?.packageVersion,
+    recommended: true
+  };
+}
+
+function summarizeInstance(instance, selectedInstanceId) {
+  return {
+    instanceId: instance.instanceId,
+    projectPath: instance.projectPath,
+    projectName: instance.projectName,
+    workspaceId: instance.workspaceId,
+    pid: instance.pid,
+    host: instance.host,
+    port: instance.port,
+    unityVersion: instance.unityVersion,
+    packageVersion: instance.packageVersion,
+    activeScene: instance.activeScene,
+    alive: instance.alive,
+    stale: instance.stale,
+    recommended: instance.instanceId === selectedInstanceId
+  };
 }

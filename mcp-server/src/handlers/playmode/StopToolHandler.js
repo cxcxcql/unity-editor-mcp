@@ -1,4 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
+import { extractState, isRecoverablePlayModeDisconnect, pollEditorState, recoverPlayModeState } from './playModeRecovery.js';
 
 /**
  * Handler for stopping Unity play mode
@@ -28,8 +29,16 @@ export class StopToolHandler extends BaseToolHandler {
       throw new Error('Unity connection not available');
     }
     
-    // Send stop command to Unity
-    const result = await this.unityConnection.sendCommand('stop_game', params);
+    let result;
+    try {
+      result = await this.unityConnection.sendCommand('stop_game', params);
+    } catch (error) {
+      if (isRecoverablePlayModeDisconnect(error)) {
+        result = await recoverPlayModeState(this.unityConnection, 'Exited play mode after reconnect');
+      } else {
+        throw error;
+      }
+    }
     
     // Check for Unity-side errors
     if (result.status === 'error') {
@@ -38,7 +47,23 @@ export class StopToolHandler extends BaseToolHandler {
       throw error;
     }
     
-    // Return the result with state information
+    const state = extractState(result);
+    if (state.isPlaying === true) {
+      const finalState = await pollEditorState(
+        this.unityConnection,
+        (candidateState) => candidateState.isPlaying === false
+      );
+
+      return {
+        ...result,
+        status: 'success',
+        message: result.message || 'Exited play mode',
+        state: finalState.state,
+        polledUntilFinalState: !finalState.timedOut,
+        transitional: finalState.timedOut
+      };
+    }
+
     return result;
   }
 }

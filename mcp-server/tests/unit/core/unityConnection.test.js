@@ -245,6 +245,32 @@ describe('UnityConnection', () => {
         /Unknown command/
       );
     });
+
+    it('should serialize concurrent commands on a single Unity connection', async () => {
+      const firstPromise = connection.sendCommand('list_components', { path: '/Player' });
+      const secondPromise = connection.sendCommand('get_component_values', { path: '/Player' });
+
+      assert.equal(mockSocket.write.mock.calls.length, 1, 'second command should wait until first completes');
+      assert.equal(parseFramedMessage(mockSocket.write.mock.calls[0].arguments[0]).type, 'list_components');
+
+      mockSocket.emit('data', frameMessage({
+        id: '1',
+        status: 'success',
+        result: { components: [] }
+      }));
+
+      assert.deepEqual(await firstPromise, { components: [] });
+      assert.equal(mockSocket.write.mock.calls.length, 2, 'second command should be written after first response');
+      assert.equal(parseFramedMessage(mockSocket.write.mock.calls[1].arguments[0]).type, 'get_component_values');
+
+      mockSocket.emit('data', frameMessage({
+        id: '2',
+        status: 'success',
+        result: { properties: {} }
+      }));
+
+      assert.deepEqual(await secondPromise, { properties: {} });
+    });
   });
 
   describe('ping', () => {

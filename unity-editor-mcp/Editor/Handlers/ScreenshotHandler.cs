@@ -20,17 +20,18 @@ namespace UnityEditorMCP.Handlers
             {
                 // Parse parameters
                 string outputPath = parameters["outputPath"]?.ToString();
-                string captureMode = parameters["captureMode"]?.ToString() ?? "game"; // game, scene, or window
+                string captureMode = parameters["captureMode"]?.ToString() ?? "game"; // game, scene, camera, or window
                 int width = parameters["width"]?.ToObject<int>() ?? 0;
                 int height = parameters["height"]?.ToObject<int>() ?? 0;
                 bool includeUI = parameters["includeUI"]?.ToObject<bool>() ?? true;
                 string windowName = parameters["windowName"]?.ToString();
+                string cameraName = parameters["cameraName"]?.ToString();
                 bool encodeAsBase64 = parameters["encodeAsBase64"]?.ToObject<bool>() ?? false;
                 
                 // Validate capture mode
                 if (!IsValidCaptureMode(captureMode))
                 {
-                    return new { error = "Invalid capture mode. Must be 'game', 'scene', or 'window'" };
+                    return new { error = "Invalid capture mode. Must be 'game', 'scene', 'camera', or 'window'" };
                 }
                 
                 // Generate output path if not provided
@@ -57,6 +58,9 @@ namespace UnityEditorMCP.Handlers
                         break;
                     case "scene":
                         result = CaptureSceneView(outputPath, width, height, encodeAsBase64);
+                        break;
+                    case "camera":
+                        result = CaptureCamera(outputPath, width, height, cameraName, encodeAsBase64, "camera");
                         break;
                     case "window":
                         result = CaptureEditorWindow(outputPath, windowName, encodeAsBase64);
@@ -150,12 +154,151 @@ namespace UnityEditorMCP.Handlers
                 }
                 else
                 {
-                    return new { error = "Failed to capture screenshot - file not created" };
+                    var fallback = CaptureCamera(outputPath, captureWidth, captureHeight, null, encodeAsBase64, "game");
+                    if (!HasError(fallback))
+                    {
+                        return fallback;
+                    }
+
+                    return new
+                    {
+                        error = "Failed to capture Game View screenshot - file not created and camera fallback failed",
+                        diagnostics = new
+                        {
+                            gameViewFound = gameView != null,
+                            targetPath = outputPath,
+                            width = captureWidth,
+                            height = captureHeight,
+                            fallback = fallback
+                        }
+                    };
                 }
             }
             catch (Exception ex)
             {
-                return new { error = $"Failed to capture Game View: {ex.Message}" };
+                var fallback = CaptureCamera(outputPath, width, height, null, encodeAsBase64, "game");
+                if (!HasError(fallback))
+                {
+                    return fallback;
+                }
+
+                return new
+                {
+                    error = $"Failed to capture Game View: {ex.Message}",
+                    diagnostics = new
+                    {
+                        targetPath = outputPath,
+                        exception = ex.Message,
+                        fallback = fallback
+                    }
+                };
+            }
+        }
+
+        private static object CaptureCamera(string outputPath, int width, int height, string cameraName, bool encodeAsBase64, string requestedMode)
+        {
+            Camera camera = FindCamera(cameraName);
+            if (camera == null)
+            {
+                return new
+                {
+                    error = string.IsNullOrEmpty(cameraName)
+                        ? "No camera found for screenshot capture"
+                        : $"Camera '{cameraName}' not found",
+                    diagnostics = new
+                    {
+                        requestedMode = requestedMode,
+                        cameraName = cameraName,
+                        targetPath = outputPath
+                    }
+                };
+            }
+
+            int captureWidth = width > 0 ? width : Mathf.Max(1, camera.pixelWidth > 0 ? camera.pixelWidth : Screen.width);
+            int captureHeight = height > 0 ? height : Mathf.Max(1, camera.pixelHeight > 0 ? camera.pixelHeight : Screen.height);
+
+            RenderTexture previousTarget = camera.targetTexture;
+            RenderTexture previousActive = RenderTexture.active;
+            RenderTexture renderTexture = new RenderTexture(captureWidth, captureHeight, 24);
+            Texture2D screenshot = null;
+            try
+            {
+                camera.targetTexture = renderTexture;
+                camera.Render();
+                RenderTexture.active = renderTexture;
+
+                screenshot = new Texture2D(captureWidth, captureHeight, TextureFormat.RGB24, false);
+                screenshot.ReadPixels(new Rect(0, 0, captureWidth, captureHeight), 0, 0);
+                screenshot.Apply();
+
+                byte[] imageBytes = screenshot.EncodeToPNG();
+                File.WriteAllBytes(outputPath, imageBytes);
+                AssetDatabase.Refresh();
+
+                var result = new
+                {
+                    success = true,
+                    path = outputPath,
+                    width = captureWidth,
+                    height = captureHeight,
+                    captureMode = requestedMode == "game" ? "game" : "camera",
+                    viewType = "Camera",
+                    cameraName = camera.name,
+                    fileSize = imageBytes.Length,
+                    message = requestedMode == "game"
+                        ? "Game View screenshot captured via Camera fallback"
+                        : "Camera screenshot captured successfully",
+                    diagnostics = new
+                    {
+                        requestedMode = requestedMode,
+                        fallbackUsed = requestedMode == "game",
+                        targetPath = outputPath
+                    }
+                };
+
+                if (encodeAsBase64)
+                {
+                    return new
+                    {
+                        result.success,
+                        result.path,
+                        result.width,
+                        result.height,
+                        result.captureMode,
+                        result.viewType,
+                        result.cameraName,
+                        result.fileSize,
+                        result.message,
+                        result.diagnostics,
+                        base64Data = Convert.ToBase64String(imageBytes)
+                    };
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return new
+                {
+                    error = $"Failed to capture camera: {ex.Message}",
+                    diagnostics = new
+                    {
+                        requestedMode = requestedMode,
+                        cameraName = camera.name,
+                        targetPath = outputPath,
+                        exception = ex.Message
+                    }
+                };
+            }
+            finally
+            {
+                camera.targetTexture = previousTarget;
+                RenderTexture.active = previousActive;
+                if (screenshot != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(screenshot);
+                }
+                UnityEngine.Object.DestroyImmediate(renderTexture);
             }
         }
         
@@ -220,6 +363,8 @@ namespace UnityEditorMCP.Handlers
                     width = captureWidth,
                     height = captureHeight,
                     captureMode = "scene",
+                    viewType = "SceneView",
+                    isGameplayCamera = false,
                     fileSize = imageBytes.Length,
                     cameraPosition = new { x = sceneCamera.transform.position.x, y = sceneCamera.transform.position.y, z = sceneCamera.transform.position.z },
                     cameraRotation = new { x = sceneCamera.transform.eulerAngles.x, y = sceneCamera.transform.eulerAngles.y, z = sceneCamera.transform.eulerAngles.z },
@@ -236,6 +381,8 @@ namespace UnityEditorMCP.Handlers
                         result.width,
                         result.height,
                         result.captureMode,
+                        result.viewType,
+                        result.isGameplayCamera,
                         result.fileSize,
                         result.cameraPosition,
                         result.cameraRotation,
@@ -405,6 +552,38 @@ namespace UnityEditorMCP.Handlers
             // Default resolution
             return new Vector2Int(1920, 1080);
         }
+
+        private static Camera FindCamera(string cameraName)
+        {
+            if (!string.IsNullOrEmpty(cameraName))
+            {
+                foreach (var camera in UnityEngine.Object.FindObjectsOfType<Camera>())
+                {
+                    if (string.Equals(camera.name, cameraName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return camera;
+                    }
+                }
+            }
+
+            if (Camera.main != null)
+            {
+                return Camera.main;
+            }
+
+            return UnityEngine.Object.FindObjectOfType<Camera>();
+        }
+
+        private static bool HasError(object result)
+        {
+            if (result == null)
+            {
+                return true;
+            }
+
+            var property = result.GetType().GetProperty("error");
+            return property != null && property.GetValue(result) != null;
+        }
         
         /// <summary>
         /// Analyzes dominant colors in the image
@@ -501,7 +680,7 @@ namespace UnityEditorMCP.Handlers
         /// </summary>
         private static bool IsValidCaptureMode(string mode)
         {
-            return mode == "game" || mode == "scene" || mode == "window";
+            return mode == "game" || mode == "scene" || mode == "camera" || mode == "window";
         }
     }
 }

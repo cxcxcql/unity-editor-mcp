@@ -185,6 +185,7 @@ namespace UnityEditorMCP.Handlers
                 string untilTimestamp = parameters["untilTimestamp"]?.ToString();
                 string sortOrder = parameters["sortOrder"]?.ToString() ?? "newest";
                 string groupBy = parameters["groupBy"]?.ToString() ?? "none";
+                bool excludeMcpInternal = parameters["excludeMcpInternal"]?.ToObject<bool>() ?? true;
 
                 // Expand "All" to all types
                 if (logTypes.Contains("All"))
@@ -234,6 +235,9 @@ namespace UnityEditorMCP.Handlers
                         int line = (int)_lineField.GetValue(logEntryInstance);
 
                         if (string.IsNullOrEmpty(message))
+                            continue;
+
+                        if (excludeMcpInternal && IsMcpInternalLog(message, file))
                             continue;
 
                         // Determine log type
@@ -361,6 +365,26 @@ namespace UnityEditorMCP.Handlers
                     }
                     return entry;
             }
+        }
+
+        private static bool IsMcpInternalLog(string message, string file)
+        {
+            if (!string.IsNullOrEmpty(message))
+            {
+                if (message.StartsWith("[Unity Editor MCP]", StringComparison.Ordinal) ||
+                    message.StartsWith("[Unity]", StringComparison.Ordinal) ||
+                    message.StartsWith("[ConsoleHandler]", StringComparison.Ordinal) ||
+                    message.StartsWith("[CompilationHandler]", StringComparison.Ordinal) ||
+                    message.StartsWith("[ComponentHandler]", StringComparison.Ordinal) ||
+                    message.StartsWith("[PlayModeHandler]", StringComparison.Ordinal) ||
+                    message.StartsWith("[ScreenshotHandler]", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return !string.IsNullOrEmpty(file) &&
+                   file.IndexOf("UnityEditorMCP", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         /// <summary>

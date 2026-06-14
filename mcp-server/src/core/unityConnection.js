@@ -16,6 +16,8 @@ export class UnityConnection extends EventEmitter {
     this.reconnectTimer = null;
     this.commandId = 0;
     this.pendingCommands = new Map();
+    this.commandQueue = [];
+    this.commandInFlight = false;
     this.isDisconnecting = false;
     this.messageBuffer = Buffer.alloc(0);
     this.endpoint = null;
@@ -364,7 +366,36 @@ export class UnityConnection extends EventEmitter {
    */
   async sendCommand(type, params = {}) {
     logger.info(`[Unity] sendCommand called: ${type}`, { connected: this.connected, params });
-    
+
+    if (!this.commandInFlight) {
+      return this.runQueuedCommand(type, params);
+    }
+
+    return new Promise((resolve, reject) => {
+      this.commandQueue.push({ type, params, resolve, reject });
+    });
+  }
+
+  async runQueuedCommand(type, params) {
+    this.commandInFlight = true;
+    try {
+      return await this.sendCommandNow(type, params);
+    } finally {
+      this.commandInFlight = false;
+      this.runNextQueuedCommand();
+    }
+  }
+
+  runNextQueuedCommand() {
+    if (this.commandInFlight || this.commandQueue.length === 0) {
+      return;
+    }
+
+    const next = this.commandQueue.shift();
+    this.runQueuedCommand(next.type, next.params).then(next.resolve, next.reject);
+  }
+
+  async sendCommandNow(type, params = {}) {
     if (!this.connected) {
       logger.error('[Unity] Cannot send command - not connected');
       throw new Error('Not connected to Unity');

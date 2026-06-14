@@ -41,6 +41,8 @@ describe('ListUnityInstancesToolHandler', () => {
     assert.equal(handler.inputSchema.properties.projectPath.type, 'string');
     assert.equal(handler.inputSchema.properties.workspaceId.type, 'string');
     assert.equal(handler.inputSchema.properties.allowSingleInstanceFallback.type, 'boolean');
+    assert.equal(handler.inputSchema.properties.compact.type, 'boolean');
+    assert.equal(handler.inputSchema.properties.includeStale.type, 'boolean');
   });
 
   it('returns workspace and Git metadata for discovered instances', async () => {
@@ -78,6 +80,46 @@ describe('ListUnityInstancesToolHandler', () => {
       branch: 'main',
       head: 'abc123'
     });
+  });
+
+  it('returns compact selected endpoint and conflicts without stale noise by default', async () => {
+    const projectPath = path.join(tempDir, 'Project');
+    await writeInstance('selected.json', {
+      instanceId: 'selected',
+      projectPath,
+      projectName: 'Project',
+      workspaceId: 'workspace-selected',
+      port: 50123,
+      lastSeen: new Date(Date.now() + 1000).toISOString()
+    });
+    await writeInstance('conflict.json', {
+      instanceId: 'conflict',
+      projectPath,
+      projectName: 'Project',
+      workspaceId: 'workspace-conflict',
+      port: 50124,
+      lastSeen: new Date().toISOString()
+    });
+    await writeInstance('stale.json', {
+      instanceId: 'stale',
+      projectPath: path.join(tempDir, 'OldProject'),
+      projectName: 'OldProject',
+      workspaceId: 'workspace-stale',
+      port: 50125,
+      pid: 999999999,
+      packageVersion: 'unknown',
+      lastSeen: new Date(Date.now() - 60000).toISOString()
+    });
+
+    const result = await handler.execute({ projectPath, compact: true });
+
+    assert.equal(result.compact, true);
+    assert.equal(result.selectedEndpoint.instanceId, 'selected');
+    assert.equal(result.selectedEndpoint.recommended, true);
+    assert.equal(result.instances.length, 2);
+    assert.deepEqual(result.instances.map((instance) => instance.instanceId), ['selected', 'conflict']);
+    assert.equal(result.conflicts.length, 1);
+    assert.equal(result.conflicts[0].instanceId, 'conflict');
   });
 
   async function writeInstance(fileName, data) {

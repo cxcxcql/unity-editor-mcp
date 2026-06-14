@@ -98,6 +98,45 @@ describe('PlayToolHandler', () => {
         /Cannot enter play mode: Compilation errors exist/
       );
     });
+
+    it('should recover when Unity closes the connection while entering play mode', async () => {
+      const calls = [];
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {
+          calls.push(['connect']);
+        }),
+        sendCommand: mock.fn(async (command, params) => {
+          calls.push([command, params]);
+          if (command === 'play_game') {
+            throw new Error('Connection closed');
+          }
+          return {
+            status: 'success',
+            state: {
+              isPlaying: true,
+              isPaused: false,
+              isCompiling: false,
+              isUpdating: false,
+              timeSinceStartup: 12
+            }
+          };
+        })
+      };
+      handler = new PlayToolHandler(mockConnection);
+
+      const result = await handler.execute({});
+
+      assert.equal(result.status, 'success');
+      assert.equal(result.message, 'Entered play mode after reconnect');
+      assert.equal(result.recoveredAfterReconnect, true);
+      assert.equal(result.state.isPlaying, true);
+      assert.deepEqual(calls, [
+        ['play_game', {}],
+        ['connect'],
+        ['get_editor_state', {}]
+      ]);
+    });
   });
 
   describe('integration with BaseToolHandler', () => {

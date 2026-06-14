@@ -1,4 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
+import { isRecoverablePlayModeDisconnect, recoverPlayModeState } from './playModeRecovery.js';
 
 /**
  * Handler for starting Unity play mode
@@ -28,8 +29,15 @@ export class PlayToolHandler extends BaseToolHandler {
       throw new Error('Unity connection not available');
     }
     
-    // Send play command to Unity
-    const result = await this.unityConnection.sendCommand('play_game', params);
+    let result;
+    try {
+      result = await this.unityConnection.sendCommand('play_game', params);
+    } catch (error) {
+      if (isRecoverablePlayModeDisconnect(error)) {
+        return recoverPlayModeState(this.unityConnection, 'Entered play mode after reconnect');
+      }
+      throw error;
+    }
     
     // Check for Unity-side errors
     if (result.status === 'error') {

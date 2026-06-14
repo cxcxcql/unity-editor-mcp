@@ -70,6 +70,7 @@ describe('EnhancedReadLogsToolHandler', () => {
       assert.ok(schema.properties.untilTimestamp);
       assert.ok(schema.properties.sortOrder);
       assert.ok(schema.properties.groupBy);
+      assert.ok(schema.properties.excludeMcpInternal);
       assert.deepEqual(schema.required, []);
     });
 
@@ -173,10 +174,20 @@ describe('EnhancedReadLogsToolHandler', () => {
       assert.equal(params.format, 'detailed');
       assert.equal(params.sortOrder, 'newest');
       assert.equal(params.groupBy, 'none');
+      assert.equal(params.excludeMcpInternal, true);
 
       assert.ok(result.logs);
       assert.equal(result.logs.length, 3);
       assert.equal(result.count, 3);
+    });
+
+    it('should allow callers to include MCP internal logs explicitly', async () => {
+      await handler.execute({
+        excludeMcpInternal: false
+      });
+
+      const params = mockUnityConnection.sendCommand.mock.calls[0].arguments[1];
+      assert.equal(params.excludeMcpInternal, false);
     });
 
     it('should filter by log types', async () => {

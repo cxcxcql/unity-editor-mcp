@@ -94,6 +94,52 @@ describe('StopToolHandler', () => {
         /Error stopping play mode: Internal error/
       );
     });
+
+    it('should poll until stop returns a final not-playing state', async () => {
+      const responses = [
+        {
+          status: 'success',
+          message: 'Exited play mode',
+          state: {
+            isPlaying: true,
+            isPaused: false,
+            isCompiling: false,
+            timeSinceStartup: 20
+          }
+        },
+        {
+          status: 'success',
+          state: {
+            isPlaying: false,
+            isPaused: false,
+            isCompiling: false,
+            timeSinceStartup: 21
+          }
+        }
+      ];
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {}),
+        sendCommand: mock.fn(async (command) => {
+          if (command === 'stop_game') {
+            return responses[0];
+          }
+          return responses[1];
+        })
+      };
+      handler = new StopToolHandler(mockConnection);
+
+      const result = await handler.execute({});
+
+      assert.equal(result.status, 'success');
+      assert.equal(result.message, 'Exited play mode');
+      assert.equal(result.state.isPlaying, false);
+      assert.equal(result.polledUntilFinalState, true);
+      assert.deepEqual(
+        mockConnection.sendCommand.mock.calls.map((call) => call.arguments[0]),
+        ['stop_game', 'get_editor_state']
+      );
+    });
   });
 
   describe('integration with BaseToolHandler', () => {

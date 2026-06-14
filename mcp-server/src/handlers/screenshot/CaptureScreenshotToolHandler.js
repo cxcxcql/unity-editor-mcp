@@ -7,7 +7,7 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
   constructor(unityConnection) {
     super(
       'capture_screenshot',
-      'Capture screenshots from Unity Editor (Game View, Scene View, or specific windows)',
+      'Capture screenshots from Unity Editor (Game View, Scene View, gameplay camera, or specific windows)',
       {
         type: 'object',
         properties: {
@@ -17,9 +17,9 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
           },
           captureMode: {
             type: 'string',
-            enum: ['game', 'scene', 'window'],
+            enum: ['game', 'scene', 'camera', 'window'],
             default: 'game',
-            description: 'What to capture: game (Game View), scene (Scene View), or window (specific editor window)'
+            description: 'What to capture: game (Game View), scene (Scene View), camera (gameplay camera), or window (specific editor window)'
           },
           width: {
             type: 'number',
@@ -37,6 +37,10 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
           windowName: {
             type: 'string',
             description: 'Name of the window to capture (required when captureMode is "window")'
+          },
+          cameraName: {
+            type: 'string',
+            description: 'Name of the camera to render when captureMode is "camera" (defaults to Main Camera/Camera.main)'
           },
           encodeAsBase64: {
             type: 'boolean',
@@ -60,8 +64,8 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
     const { captureMode = 'game', windowName, outputPath } = params;
 
     // Validate capture mode
-    if (!['game', 'scene', 'window'].includes(captureMode)) {
-      throw new Error('captureMode must be one of: game, scene, window');
+    if (!['game', 'scene', 'camera', 'window'].includes(captureMode)) {
+      throw new Error('captureMode must be one of: game, scene, camera, window');
     }
 
     // Window mode requires windowName
@@ -150,6 +154,18 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
       result.cameraRotation = response.cameraRotation;
     }
 
+    if (response.cameraName) {
+      result.cameraName = response.cameraName;
+    }
+
+    if (response.viewType) {
+      result.viewType = response.viewType;
+    }
+
+    if (response.diagnostics) {
+      result.diagnostics = response.diagnostics;
+    }
+
     if (response.base64Data) {
       result.base64Data = response.base64Data;
     }
@@ -197,6 +213,14 @@ export class CaptureScreenshotToolHandler extends BaseToolHandler {
         params: {
           captureMode: 'window',
           windowName: 'Console'
+        }
+      },
+      captureGameplayCamera: {
+        description: 'Render the gameplay camera directly',
+        params: {
+          captureMode: 'camera',
+          cameraName: 'Main Camera',
+          outputPath: 'Assets/Screenshots/camera_capture.png'
         }
       }
     };

@@ -61,6 +61,11 @@ export class EnhancedReadLogsToolHandler extends BaseToolHandler {
             description: 'Group logs by criteria',
             enum: ['none', 'type', 'file', 'time'],
             default: 'none'
+          },
+          excludeMcpInternal: {
+            type: 'boolean',
+            description: 'Exclude Unity Editor MCP transport/internal logs from results',
+            default: true
           }
         },
         required: []
@@ -85,7 +90,8 @@ export class EnhancedReadLogsToolHandler extends BaseToolHandler {
       sinceTimestamp,
       untilTimestamp,
       sortOrder,
-      groupBy
+      groupBy,
+      excludeMcpInternal
     } = params;
 
     // Validate count
@@ -154,6 +160,10 @@ export class EnhancedReadLogsToolHandler extends BaseToolHandler {
         throw new Error(`groupBy must be one of: ${validGroups.join(', ')}`);
       }
     }
+
+    if (excludeMcpInternal !== undefined && typeof excludeMcpInternal !== 'boolean') {
+      throw new Error('excludeMcpInternal must be a boolean');
+    }
   }
 
   /**
@@ -186,7 +196,8 @@ export class EnhancedReadLogsToolHandler extends BaseToolHandler {
       sinceTimestamp,
       untilTimestamp,
       sortOrder = 'newest',
-      groupBy = 'none'
+      groupBy = 'none',
+      excludeMcpInternal = true
     } = params;
 
     // Ensure connection to Unity
@@ -201,7 +212,8 @@ export class EnhancedReadLogsToolHandler extends BaseToolHandler {
       includeStackTrace,
       format,
       sortOrder,
-      groupBy
+      groupBy,
+      excludeMcpInternal
     };
 
     // Add optional parameters
