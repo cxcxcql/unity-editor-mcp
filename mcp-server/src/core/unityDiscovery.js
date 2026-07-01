@@ -334,6 +334,22 @@ export async function resolveUnityEndpoint(options = {}) {
   });
 
   if (!selection) {
+    const staleSelection = await selectSingleConnectableStaleInstance(selectableInstances, {
+      fallbackHost: host,
+      canConnect: portProbe
+    });
+    if (staleSelection) {
+      return {
+        host: staleSelection.instance.host || host,
+        port: staleSelection.instance.port,
+        source: 'discovery',
+        reason: staleSelection.reason,
+        instance: staleSelection.instance,
+        projectPath: staleSelection.instance.projectPath,
+        authToken: staleSelection.instance.authToken
+      };
+    }
+
     return {
       host,
       port,
@@ -349,6 +365,35 @@ export async function resolveUnityEndpoint(options = {}) {
     instance: selection.instance,
     projectPath: selection.instance.projectPath,
     authToken: selection.instance.authToken
+  };
+}
+
+async function selectSingleConnectableStaleInstance(instances, options = {}) {
+  const candidates = instances.filter((instance) =>
+    isSelectableInstance(instance) &&
+    instance.alive &&
+    instance.stale &&
+    Number.isInteger(instance.port)
+  );
+
+  const connectable = [];
+  for (const instance of candidates) {
+    const host = instance.host || options.fallbackHost || '127.0.0.1';
+    if (await options.canConnect(host, instance.port)) {
+      connectable.push(instance);
+    }
+  }
+
+  if (connectable.length !== 1) {
+    return null;
+  }
+
+  return {
+    instance: {
+      ...connectable[0],
+      staleExactMatch: true
+    },
+    reason: 'single alive stale Unity instance'
   };
 }
 

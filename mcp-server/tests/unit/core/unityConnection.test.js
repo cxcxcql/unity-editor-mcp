@@ -213,6 +213,7 @@ describe('UnityConnection', () => {
 
     it('should send command with incrementing ID', async () => {
       const sendPromise = connection.sendCommand('ping', { echo: 'test' });
+      await waitForSocketWrites(mockSocket, 1);
       
       // Verify command was sent
       assert.equal(mockSocket.write.mock.calls.length, 1);
@@ -235,8 +236,48 @@ describe('UnityConnection', () => {
       assert.deepEqual(result, { message: 'pong' });
     });
 
+    it('should rediscover before sending when the connected endpoint has no auth token', async () => {
+      testConfig.unity.hasExplicitPort = false;
+      testConfig.unity.discovery = { enabled: true };
+      connection.endpoint = {
+        host: 'localhost',
+        port: 6400,
+        source: 'default-port'
+      };
+      connection.resolveEndpoint = createSpy(async () => {
+        connection.endpoint = {
+          host: '127.0.0.1',
+          port: 6400,
+          source: 'discovery',
+          authToken: 'fresh-token',
+          instance: {
+            pid: 1234,
+            port: 6400,
+            authToken: 'fresh-token'
+          }
+        };
+        return connection.endpoint;
+      });
+
+      const sendPromise = connection.sendCommand('ping', { echo: 'token' });
+      await waitForSocketWrites(mockSocket, 1);
+
+      const command = parseFramedMessage(mockSocket.write.mock.calls[0].arguments[0]);
+      assert.equal(command.authToken, 'fresh-token');
+      assert.equal(connection.resolveEndpoint.mock.calls.length, 1);
+
+      mockSocket.emit('data', frameMessage({
+        id: '1',
+        status: 'success',
+        result: { message: 'pong' }
+      }));
+
+      assert.deepEqual(await sendPromise, { message: 'pong' });
+    });
+
     it('should handle command timeout', async () => {
       const sendPromise = connection.sendCommand('slow-command', {}, { timeoutMs: 5 });
+      await waitForSocketWrites(mockSocket, 1);
 
       assert.equal(connection.pendingCommands.size, 1);
 
@@ -272,6 +313,7 @@ describe('UnityConnection', () => {
       });
       const firstPromise = connection.sendCommand('capture_screenshot', {}, { timeoutMs: 5 });
       const secondPromise = connection.sendCommand('list_components', { gameObjectPath: '/Player' });
+      await waitForSocketWrites(mockSocket, 1);
 
       await assert.rejects(firstPromise, /Command timeout|Connection closed/);
       await assert.rejects(
@@ -318,6 +360,7 @@ describe('UnityConnection', () => {
 
     it('should handle error responses', async () => {
       const sendPromise = connection.sendCommand('bad-command');
+      await waitForSocketWrites(mockSocket, 1);
       
       // Simulate error response
       const response = {
@@ -333,9 +376,62 @@ describe('UnityConnection', () => {
       );
     });
 
+    it('should refresh the token and retry when Unity returns AUTH_FAILED as a result payload', async () => {
+      connection.endpoint = {
+        host: 'localhost',
+        port: 6400,
+        authToken: 'stale-token',
+        instance: {
+          pid: 1234,
+          port: 6400,
+          authToken: 'stale-token'
+        }
+      };
+      let refreshCount = 0;
+      connection.refreshAuthTokenFromRegistry = createSpy(async () => {
+        refreshCount++;
+        if (refreshCount > 1) {
+          connection.endpoint.authToken = 'fresh-token';
+          connection.endpoint.instance.authToken = 'fresh-token';
+        }
+      });
+
+      const sendPromise = connection.sendCommand('ping', { echo: 'recover' });
+      await waitForSocketWrites(mockSocket, 1);
+
+      const firstCommand = parseFramedMessage(mockSocket.write.mock.calls[0].arguments[0]);
+      assert.equal(firstCommand.authToken, 'stale-token');
+
+      mockSocket.emit('data', frameMessage({
+        id: '1',
+        status: 'success',
+        result: {
+          code: 'AUTH_FAILED',
+          message: 'Invalid or missing Unity Editor MCP auth token'
+        }
+      }));
+      await waitForSocketWrites(mockSocket, 2);
+
+      const secondCommand = parseFramedMessage(mockSocket.write.mock.calls[1].arguments[0]);
+      assert.equal(secondCommand.id, '2');
+      assert.equal(secondCommand.authToken, 'fresh-token');
+      assert.deepEqual(secondCommand.params, { echo: 'recover' });
+
+      mockSocket.emit('data', frameMessage({
+        id: '2',
+        status: 'success',
+        result: { message: 'pong' }
+      }));
+
+      const result = await sendPromise;
+      assert.deepEqual(result, { message: 'pong' });
+      assert.equal(connection.refreshAuthTokenFromRegistry.mock.calls.length, 3);
+    });
+
     it('should serialize concurrent commands on a single Unity connection', async () => {
       const firstPromise = connection.sendCommand('list_components', { path: '/Player' });
       const secondPromise = connection.sendCommand('get_component_values', { path: '/Player' });
+      await waitForSocketWrites(mockSocket, 1);
 
       assert.equal(mockSocket.write.mock.calls.length, 1, 'second command should wait until first completes');
       assert.equal(parseFramedMessage(mockSocket.write.mock.calls[0].arguments[0]).type, 'list_components');
@@ -347,6 +443,7 @@ describe('UnityConnection', () => {
       }));
 
       assert.deepEqual(await firstPromise, { components: [] });
+      await waitForSocketWrites(mockSocket, 2);
       assert.equal(mockSocket.write.mock.calls.length, 2, 'second command should be written after first response');
       assert.equal(parseFramedMessage(mockSocket.write.mock.calls[1].arguments[0]).type, 'get_component_values');
 
@@ -370,6 +467,7 @@ describe('UnityConnection', () => {
         }
       };
 
+      await waitForSocketWrites(mockSocket, 1);
       assert.equal(mockSocket.write.mock.calls.length, 1);
       assert.equal(connection.commandQueue.length, 1);
 
@@ -400,6 +498,7 @@ describe('UnityConnection', () => {
 
     it('should send framed ping command', async () => {
       const pingPromise = connection.ping();
+      await waitForSocketWrites(mockSocket, 1);
       
       assert.equal(mockSocket.write.mock.calls.length, 1);
       const command = parseFramedMessage(mockSocket.write.mock.calls[0].arguments[0]);
@@ -622,6 +721,17 @@ function frameMessage(message) {
 function parseFramedMessage(buffer) {
   const messageLength = buffer.readInt32BE(0);
   return JSON.parse(buffer.slice(4, 4 + messageLength).toString('utf8'));
+}
+
+async function waitForSocketWrites(socket, count) {
+  for (let i = 0; i < 10; i++) {
+    if (socket.write.mock.calls.length >= count) {
+      return;
+    }
+    await Promise.resolve();
+  }
+
+  assert.fail(`Timed out waiting for ${count} socket write(s)`);
 }
 
 function createSpy(implementation = () => {}) {

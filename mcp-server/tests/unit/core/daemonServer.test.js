@@ -1,0 +1,242 @@
+import { afterEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import fsp from 'fs/promises';
+import http from 'http';
+import os from 'os';
+import path from 'path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { startDaemonServer } from '../../../src/core/daemonServer.js';
+import { readDaemonRegistry } from '../../../src/core/daemonRegistry.js';
+
+describe('daemon server', () => {
+  const tempDirs = [];
+  const servers = [];
+
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => server.close()));
+    await Promise.all(tempDirs.map((dir) => fsp.rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  async function makeTempDir() {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'unity-mcp-daemon-server-'));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  it('starts a local HTTP daemon and writes health metadata', async () => {
+    const registryDir = await makeTempDir();
+    const daemon = await startDaemonServer({
+      host: '127.0.0.1',
+      port: 0,
+      registryDir,
+      connectToUnity: false
+    });
+    servers.push(daemon);
+
+    const response = await fetch(`http://127.0.0.1:${daemon.port}/health`);
+    const health = await response.json();
+    const registry = await readDaemonRegistry({ registryDir });
+
+    assert.equal(response.status, 200);
+    assert.equal(health.status, 'ok');
+    assert.equal(health.pid, process.pid);
+    assert.equal(registry.pid, process.pid);
+    assert.equal(registry.port, daemon.port);
+    assert.equal(registry.url, `http://127.0.0.1:${daemon.port}/mcp`);
+  });
+
+  it('serves MCP tools over Streamable HTTP', async () => {
+    const registryDir = await makeTempDir();
+    const unityConnection = {
+      isConnected: () => true,
+      connect: async () => {},
+      disconnect: () => {},
+      getConnectionInfo: () => ({
+        connected: true,
+        endpoint: { port: 6400 }
+      }),
+      sendCommand: async (type, params) => {
+        assert.equal(type, 'ping');
+        return {
+          message: 'pong',
+          echo: params.message,
+          timestamp: '2026-06-29T00:00:00.000Z',
+          unityVersion: '6000.2.7f2'
+        };
+      }
+    };
+    const daemon = await startDaemonServer({
+      host: '127.0.0.1',
+      port: 0,
+      registryDir,
+      unityConnection,
+      connectToUnity: false
+    });
+    servers.push(daemon);
+
+    const client = new Client(
+      { name: 'daemon-server-test', version: '1.0.0' },
+      { capabilities: {} }
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(daemon.url));
+    try {
+      await client.connect(transport);
+      const tools = await client.listTools();
+      const result = await client.callTool({
+        name: 'ping',
+        arguments: { message: 'hello' }
+      });
+
+      assert.ok(tools.tools.some((tool) => tool.name === 'ping'));
+      assert.equal(result.structuredContent.message, 'pong');
+      assert.equal(result.structuredContent.echo, 'hello');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('accepts a fresh Streamable HTTP client after the previous client closes', async () => {
+    const registryDir = await makeTempDir();
+    const unityConnection = createMockUnityConnection();
+    const daemon = await startDaemonServer({
+      host: '127.0.0.1',
+      port: 0,
+      registryDir,
+      unityConnection,
+      connectToUnity: false
+    });
+    servers.push(daemon);
+
+    const first = await callPingThroughNewClient(daemon.url, 'first');
+    const second = await callPingThroughNewClient(daemon.url, 'second');
+
+    assert.equal(first.structuredContent.echo, 'first');
+    assert.equal(second.structuredContent.echo, 'second');
+  });
+
+  it('rejects MCP requests with invalid localhost host or origin headers', async () => {
+    const registryDir = await makeTempDir();
+    const daemon = await startDaemonServer({
+      host: '127.0.0.1',
+      port: 0,
+      registryDir,
+      unityConnection: createMockUnityConnection(),
+      connectToUnity: false
+    });
+    servers.push(daemon);
+
+    const invalidHost = await postMcpJson(daemon.port, {
+      host: 'evil.example',
+      origin: `http://127.0.0.1:${daemon.port}`
+    });
+    const invalidOrigin = await postMcpJson(daemon.port, {
+      host: `127.0.0.1:${daemon.port}`,
+      origin: 'http://evil.example'
+    });
+
+    assert.equal(invalidHost.statusCode, 403);
+    assert.match(invalidHost.body, /Invalid Host header/);
+    assert.equal(invalidOrigin.statusCode, 403);
+    assert.match(invalidOrigin.body, /Invalid Origin header/);
+  });
+
+  it('rejects oversized daemon POST bodies before parsing JSON', async () => {
+    const registryDir = await makeTempDir();
+    const daemon = await startDaemonServer({
+      host: '127.0.0.1',
+      port: 0,
+      registryDir,
+      unityConnection: createMockUnityConnection(),
+      connectToUnity: false,
+      maxBodyBytes: 8
+    });
+    servers.push(daemon);
+
+    const response = await postRaw(daemon.port, 'x'.repeat(64), {
+      host: `127.0.0.1:${daemon.port}`
+    });
+
+    assert.equal(response.statusCode, 413);
+    assert.match(response.body, /DAEMON_REQUEST_TOO_LARGE/);
+  });
+});
+
+function createMockUnityConnection() {
+  return {
+    isConnected: () => true,
+    connect: async () => {},
+    disconnect: () => {},
+    getConnectionInfo: () => ({
+      connected: true,
+      endpoint: { port: 6400 }
+    }),
+    sendCommand: async (type, params) => {
+      assert.equal(type, 'ping');
+      return {
+        message: 'pong',
+        echo: params.message,
+        timestamp: '2026-06-29T00:00:00.000Z',
+        unityVersion: '6000.2.7f2'
+      };
+    }
+  };
+}
+
+async function callPingThroughNewClient(url, message) {
+  const client = new Client(
+    { name: `daemon-server-test-${message}`, version: '1.0.0' },
+    { capabilities: {} }
+  );
+  const transport = new StreamableHTTPClientTransport(new URL(url));
+  try {
+    await client.connect(transport);
+    return await client.callTool({
+      name: 'ping',
+      arguments: { message }
+    });
+  } finally {
+    await client.close();
+  }
+}
+
+function postMcpJson(port, headers) {
+  return postRaw(port, JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'host-header-test', version: '1.0.0' }
+    }
+  }), {
+    ...headers,
+    'content-type': 'application/json'
+  });
+}
+
+function postRaw(port, body, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        ...headers,
+        'content-length': Buffer.byteLength(body)
+      }
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve({
+        statusCode: response.statusCode,
+        body: Buffer.concat(chunks).toString('utf8')
+      }));
+    });
+    request.on('error', reject);
+    request.end(body);
+  });
+}

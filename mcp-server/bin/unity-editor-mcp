@@ -2,22 +2,65 @@
 import { main } from '../src/core/server.js';
 import { config } from '../src/core/config.js';
 import { createDiscoveryReport, formatDiscoveryReport, redactDiscoveryReport } from '../src/core/unityDiscovery.js';
+import { cleanupStaleDaemon, createDaemonStatusReport, probeTcpEndpoint } from '../src/core/daemonMaintenance.js';
 
 const command = process.argv[2];
+
+if (command === 'cleanup-stale') {
+  const result = await cleanupStaleDaemon({
+    registryDir: config.daemon.registryDir,
+    staleAfterMs: config.daemon.staleAfterMs,
+    healthTimeoutMs: config.daemon.healthTimeoutMs
+  });
+
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(result.message);
+  }
+
+  process.exit(0);
+}
 
 if (command === 'doctor' || command === 'list-instances') {
   const report = await createDiscoveryReport({
     unityConfig: config.unity,
     cwd: process.cwd()
   });
+  const redactedReport = redactDiscoveryReport(report);
+  const unityListener = report.error
+    ? {
+        status: 'error',
+        code: report.errorCode,
+        message: report.error
+      }
+    : await createUnityListenerLayer(report.endpoint, redactedReport.endpoint);
+  const daemonReport = await createDaemonStatusReport({
+    registryDir: config.daemon.registryDir,
+    staleAfterMs: config.daemon.staleAfterMs,
+    healthTimeoutMs: config.daemon.healthTimeoutMs,
+    unityReport: unityListener
+  });
 
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify(redactDiscoveryReport(report), null, 2));
+    console.log(JSON.stringify({
+      unity: redactedReport,
+      mcp: daemonReport
+    }, null, 2));
   } else {
     console.log(formatDiscoveryReport(report));
+    console.log('');
+    console.log('Unity MCP daemon report');
+    console.log(`Stdio shim: ${daemonReport.layers.stdioShim.status}`);
+    console.log(`Daemon: ${daemonReport.layers.daemon.status}`);
+    console.log(`Unity listener: ${daemonReport.layers.unityListener.status}`);
+    console.log('Recommendations:');
+    for (const recommendation of daemonReport.recommendations) {
+      console.log(`- ${recommendation}`);
+    }
   }
 
-  process.exit(report.error ? 1 : 0);
+  process.exit(report.error || unityListener.status !== 'ok' ? 1 : 0);
 }
 
 main().catch((error) => {
@@ -25,3 +68,25 @@ main().catch((error) => {
   console.error('Stack trace:', error.stack);
   process.exit(1);
 });
+
+async function createUnityListenerLayer(endpoint, redactedEndpoint) {
+  const probe = await probeTcpEndpoint(endpoint, {
+    timeoutMs: config.daemon.healthTimeoutMs
+  });
+
+  if (probe.ok) {
+    return {
+      status: 'ok',
+      endpoint: redactedEndpoint,
+      message: 'Unity editor listener accepts TCP connections.'
+    };
+  }
+
+  return {
+    status: 'unreachable',
+    endpoint: redactedEndpoint,
+    message: `No Unity editor listener accepted TCP on ${endpoint.host}:${endpoint.port}.`,
+    error: probe.error,
+    code: probe.code
+  };
+}

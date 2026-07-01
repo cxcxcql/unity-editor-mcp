@@ -5,78 +5,83 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { UnityConnection } from './unityConnection.js';
 import { registerMcpHandlers } from './mcpRegistration.js';
+import { registerDaemonProxyHandlers } from './daemonProxy.js';
+import { createDaemonMcpClient } from './daemonClient.js';
+import { startDaemonCli } from './daemonServer.js';
 import { createHandlers } from '../handlers/index.js';
 import { config, logger } from './config.js';
 
-// Create Unity connection
-const unityConnection = new UnityConnection();
-
-// Create tool handlers
-const handlers = createHandlers(unityConnection);
-
-// Create MCP server
-const server = new Server(
-  {
-    name: config.server.name,
-    version: config.server.version,
-  },
-  {
-    capabilities: {
-      tools: {}
-    }
-  }
-);
-
-registerMcpHandlers(server, handlers, { logger });
-
-// Handle connection events
-unityConnection.on('connected', () => {
-  logger.info('Unity connection established');
-});
-
-unityConnection.on('disconnected', () => {
-  logger.info('Unity connection lost');
-});
-
-unityConnection.on('error', (error) => {
-  logger.error('Unity connection error:', error.message);
-});
-
-// Initialize server
 export async function main() {
-  try {
-    // Create transport - no logging before connection
-    const transport = new StdioServerTransport();
-    
-    // Connect to transport
-    await server.connect(transport);
-    
-    // Now safe to log after connection established
-    logger.info('MCP server started successfully');
-    
-    // Attempt to connect to Unity
-    try {
-      await unityConnection.connect();
-    } catch (error) {
-      logger.error('Initial Unity connection failed:', error.message);
-      logger.info('Unity connection will retry automatically');
+  if (process.argv.includes('daemon')) {
+    await startDaemonCli();
+    return;
+  }
+
+  if (config.daemon.enabled) {
+    await startStdioDaemonProxy();
+    return;
+  }
+
+  await startDirectStdioServer();
+}
+
+export async function startStdioDaemonProxy(customConfig = config, options = {}) {
+  let cachedClient = null;
+  let cachedTransport = null;
+  const server = new Server(
+    {
+      name: customConfig.server.name,
+      version: customConfig.server.version,
+    },
+    {
+      capabilities: {
+        tools: {}
+      }
     }
-    
-    // Handle shutdown
-    process.on('SIGINT', async () => {
-      logger.info('Shutting down...');
-      unityConnection.disconnect();
+  );
+
+  registerDaemonProxyHandlers(server, {
+    getClient: async ({ forceRefresh } = {}) => {
+      if (cachedClient && !forceRefresh) {
+        return cachedClient;
+      }
+
+      if (forceRefresh) {
+        await closeQuietly(cachedTransport);
+        await closeQuietly(cachedClient);
+        cachedClient = null;
+        cachedTransport = null;
+      }
+
+      const connection = await createDaemonMcpClient({
+        ...customConfig.daemon,
+        ...(options.daemon || {})
+      });
+      cachedClient = connection.client;
+      cachedTransport = connection.transport;
+      return cachedClient;
+    },
+    onClientError: async (error, context = {}) => {
+      logger.warn(`Daemon MCP ${context.method || 'request'} failed; refreshing shim transport: ${error.message}`);
+    }
+  });
+
+  try {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    logger.info('MCP stdio shim connected to Unity MCP daemon');
+
+    const shutdown = async () => {
+      logger.info('Shutting down stdio daemon proxy...');
+      await cachedTransport?.close?.();
+      await cachedClient?.close?.();
       await server.close();
       process.exit(0);
-    });
-    
-    process.on('SIGTERM', async () => {
-      logger.info('Shutting down...');
-      unityConnection.disconnect();
-      await server.close();
-      process.exit(0);
-    });
-    
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    return { server, get cachedClient() { return cachedClient; } };
   } catch (error) {
     console.error('Failed to start server:', error);
     console.error('Stack trace:', error.stack);
@@ -84,9 +89,59 @@ export async function main() {
   }
 }
 
-// Export for testing
+async function closeQuietly(target) {
+  try {
+    await target?.close?.();
+  } catch {
+    // Best-effort cleanup before reconnecting the shim to the daemon.
+  }
+}
+
+export async function startDirectStdioServer(customConfig = config) {
+  const { server, unityConnection } = await createServer(customConfig);
+  unityConnection.on('connected', () => {
+    logger.info('Unity connection established');
+  });
+
+  unityConnection.on('disconnected', () => {
+    logger.info('Unity connection lost');
+  });
+
+  unityConnection.on('error', (error) => {
+    logger.error('Unity connection error:', error.message);
+  });
+
+  try {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    logger.info('MCP direct stdio server started successfully');
+
+    try {
+      await unityConnection.connect();
+    } catch (error) {
+      logger.error('Initial Unity connection failed:', error.message);
+      logger.info('Unity connection will retry automatically');
+    }
+
+    const shutdown = async () => {
+      logger.info('Shutting down...');
+      unityConnection.disconnect();
+      await server.close();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    return { server, unityConnection };
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    console.error('Stack trace:', error.stack);
+    process.exit(1);
+  }
+}
+
 export async function createServer(customConfig = config) {
-  const testUnityConnection = new UnityConnection();
+  const testUnityConnection = new UnityConnection({ config: customConfig });
   const testHandlers = createHandlers(testUnityConnection);
   
   const testServer = new Server(

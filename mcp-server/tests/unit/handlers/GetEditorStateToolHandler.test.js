@@ -41,6 +41,17 @@ describe('GetEditorStateToolHandler', () => {
 
   describe('execute', () => {
     it('should get editor state in edit mode', async () => {
+      mockConnection.getConnectionInfo = () => ({
+        connected: true,
+        endpoint: {
+          port: 6400,
+          instance: {
+            pid: 12345,
+            projectPath: '/tmp/project',
+            packageVersion: '0.15.5'
+          }
+        }
+      });
       const result = await handler.execute({});
       
       assert.equal(mockConnection.sendCommand.mock.calls.length, 1);
@@ -54,6 +65,9 @@ describe('GetEditorStateToolHandler', () => {
       assert.equal(result.state.isUpdating, false);
       assert.ok(result.state.applicationPath);
       assert.ok(result.state.timeSinceStartup);
+      assert.equal(result.connection.endpoint.port, 6400);
+      assert.equal(result.connection.endpoint.instance.packageVersion, '0.15.5');
+      assert.equal(typeof result.server.gitHead, 'string');
     });
 
     it('should get editor state in play mode', async () => {

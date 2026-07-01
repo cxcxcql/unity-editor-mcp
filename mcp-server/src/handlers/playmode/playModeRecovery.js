@@ -1,7 +1,13 @@
-export const PLAY_RECOVERY_TIMEOUT_MS = 15000;
-export const STOP_TRANSITION_TIMEOUT_MS = 10000;
-export const PLAY_MODE_POLL_INTERVAL_MS = 250;
-export const PLAY_MODE_STATE_COMMAND_TIMEOUT_MS = 1000;
+import { config } from '../../core/config.js';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
+
+export const PLAY_RECOVERY_TIMEOUT_MS = config.playModeRecovery.timeoutMs;
+export const STOP_TRANSITION_TIMEOUT_MS = config.playModeRecovery.stopTransitionTimeoutMs;
+export const PLAY_MODE_POLL_INTERVAL_MS = config.playModeRecovery.pollIntervalMs;
+export const PLAY_MODE_STATE_COMMAND_TIMEOUT_MS = config.playModeRecovery.stateCommandTimeoutMs;
 
 export function isRecoverablePlayModeDisconnect(error) {
   return error?.message === 'Connection closed' ||
@@ -9,8 +15,11 @@ export function isRecoverablePlayModeDisconnect(error) {
     error?.message === 'Command timeout' ||
     error?.message === 'Not connected to Unity' ||
     error?.message === 'Unity connection not available' ||
+    error?.message === 'AUTH_FAILED' ||
     error?.code === 'ECONNRESET' ||
+    error?.code === 'ECONNREFUSED' ||
     error?.code === 'EPIPE' ||
+    error?.code === 'AUTH_FAILED' ||
     error?.code === 'COMMAND_TIMEOUT' ||
     error?.code === 'NOT_CONNECTED' ||
     error?.code === 'CONNECTION_CLOSED' ||
@@ -21,7 +30,7 @@ export function isRecoverablePlayModeDisconnect(error) {
 export async function recoverPlayModeState(unityConnection, message, options = {}) {
   const verified = await waitForEditorState(
     unityConnection,
-    (state) => state.isPlaying === true,
+    (state) => isPlayModeUsable(state),
     {
       timeoutMs: options.timeoutMs ?? PLAY_RECOVERY_TIMEOUT_MS,
       pollIntervalMs: options.pollIntervalMs ?? PLAY_MODE_POLL_INTERVAL_MS,
@@ -38,8 +47,29 @@ export async function recoverPlayModeState(unityConnection, message, options = {
     recoveredAfterReconnect: true,
     state: verified.state,
     attempts: verified.attempts,
-    elapsedMs: verified.elapsedMs
+    elapsedMs: verified.elapsedMs,
+    recoveryActions: verified.recoveryActions
   };
+}
+
+export function isPlayModeUsable(state) {
+  if (state?.isPlaying !== true || state?.isPaused === true) {
+    return false;
+  }
+
+  if (state.isPlayerLoopAdvancing === false) {
+    return false;
+  }
+
+  if (state.isPlayerLoopAdvancing === true) {
+    return true;
+  }
+
+  if (state.frameCount !== undefined || state.time !== undefined) {
+    return Number(state.frameCount || 0) > 1 && Number(state.time || 0) > 0;
+  }
+
+  return true;
 }
 
 export async function waitForEditorState(unityConnection, predicate, options = {}) {
@@ -51,6 +81,8 @@ export async function waitForEditorState(unityConnection, predicate, options = {
   let attempts = 0;
   let lastState = null;
   let shouldConnect = options.connectBeforeFirstPoll === true;
+  let activatedUnity = false;
+  const recoveryActions = [];
 
   do {
     if (shouldConnect) {
@@ -97,8 +129,14 @@ export async function waitForEditorState(unityConnection, predicate, options = {
           result,
           state,
           attempts,
-          elapsedMs: Date.now() - startedAt
+          elapsedMs: Date.now() - startedAt,
+          recoveryActions
         };
+      }
+
+      if (!activatedUnity && shouldActivateUnityOnFrozenPlayMode(state, attempts, options)) {
+        activatedUnity = true;
+        recoveryActions.push(await activateUnityEditor(options));
       }
     } catch (error) {
       if (!isRecoverablePlayModeDisconnect(error)) {
@@ -151,6 +189,48 @@ function throwIfTimedOut(code, message, { startedAt, timeoutMs, lastState, attem
     attempts,
     elapsedMs: Date.now() - startedAt
   });
+}
+
+function shouldActivateUnityOnFrozenPlayMode(state, attempts, options = {}) {
+  const enabled = options.activateUnityOnFreeze ?? config.playModeRecovery.activateUnityOnFreeze;
+  if (!enabled || attempts < 2) {
+    return false;
+  }
+
+  return state?.isPlaying === true &&
+    state?.isPaused !== true &&
+    state?.isPlayerLoopAdvancing !== true &&
+    Number(state?.frameCount || 0) <= 1 &&
+    Number(state?.time || 0) === 0;
+}
+
+async function activateUnityEditor(options = {}) {
+  const action = {
+    type: 'activate_unity_editor',
+    platform: process.platform
+  };
+
+  if (typeof options.activateUnityEditor === 'function') {
+    try {
+      await options.activateUnityEditor();
+      return { ...action, status: 'success', source: 'custom' };
+    } catch (error) {
+      return { ...action, status: 'failed', source: 'custom', error: error.message };
+    }
+  }
+
+  if (process.platform !== 'darwin') {
+    return { ...action, status: 'skipped', reason: 'not_macos' };
+  }
+
+  try {
+    await execFileAsync('osascript', ['-e', 'tell application "Unity" to activate'], {
+      timeout: 2000
+    });
+    return { ...action, status: 'success', source: 'osascript' };
+  } catch (error) {
+    return { ...action, status: 'failed', source: 'osascript', error: error.message };
+  }
 }
 
 function sleep(ms) {

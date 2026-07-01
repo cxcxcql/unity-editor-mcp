@@ -685,6 +685,75 @@ Manual retest checklist after committing, pushing, refreshing the Unity package 
 Known remaining non-code retest constraint:
 - Restart the MCP client/session after pulling the next commit; a running stale stdio MCP process cannot be re-bound by repository changes alone.
 
+## Retest During Gameplay Screen Rebuild
+
+Retested: 2026-06-14
+MCP repo commit: `f047cde7b0d336d8a381f192c9cad494fc4ff72b`
+Unity project package lock: `f047cde7b0d336d8a381f192c9cad494fc4ff72b`
+Resolved package cache: `Library/PackageCache/com.unity.editor-mcp@68f7001ca727`
+Reported Unity package version from live ping: `0.15.5`
+
+Scope:
+- Rebuilt the Bottomless Well gameplay scene while fixing HUD atlas sprites and a generated Moss Gem reveal FX.
+- Tested through the Unity MCP bridge; the Codex-hosted MCP tool wrapper stayed broken, so live commands were also sent directly to the Unity listener with the same framed protocol and current registry auth token.
+
+Findings:
+
+1. Codex-hosted MCP wrapper still failed before useful tool execution.
+   - `mcp__unity_editor_mcp.list_unity_instances` failed twice with `Transport closed`.
+   - `mcp__unity_editor_mcp.ping` also failed with `Transport closed`.
+   - Unity was running and the MCP package was loaded, so this was not an editor-side absence.
+   - Direct framed TCP `ping` to the registry-selected listener on pid `70966`, port `6400`, succeeded and returned `pong`, project path `/Users/ozan/UnityProjects/Github/bottomless-well`, workspace id `d4a237c2-130a-4bb2-8e74-0c0ee17bff3a`, package version `0.15.5`.
+
+2. Unity listener was healthy while the hosted MCP wrapper was unusable.
+   - Direct framed TCP calls succeeded for `ping`, `get_editor_state`, `execute_menu_item`, `capture_screenshot`, `run_tests`, `get_test_results`, `read_logs`, and `stop_game`.
+   - This suggests the failure is in the MCP stdio/client wrapper lifecycle, not the Unity package listener itself.
+
+3. `execute_menu_item` can return success while Unity is still compiling/reloading.
+   - `execute_menu_item` for `Bottomless Well/Build MVP Scene` returned `success: true`, `executed: true`, and `message: "Menu item executed successfully"`.
+   - In multiple runs, the same response's `editorState` still had `isCompiling: true`.
+   - Follow-up `get_editor_state` sometimes timed out or hit `ECONNREFUSED 127.0.0.1:6400` during the domain reload before the listener came back.
+   - Expected: either wait for the menu-triggered reload to settle, reconnect and report final state, or mark the result as transitional.
+
+4. Registry/listener can point at a temporarily unavailable port during domain reload.
+   - After a menu-triggered compile/reload, the latest registry entry still pointed at port `6400`, but direct connection briefly failed with `ECONNREFUSED`.
+   - The listener came back shortly afterward and the same registry path was usable again.
+   - Expected: discovery/connection should classify this as transitional reload state and retry, not surface it as a hard connection failure without context.
+
+5. `play_game` still fails to produce a reliable command response.
+   - Direct framed `play_game` timed out waiting for a response.
+   - Polling immediately afterward showed Unity had entered Play Mode.
+   - In longer runs, `get_editor_state` showed `isPlaying: true`, `isPlayerLoopAdvancing: true`, and high advancing frame counts.
+   - With an intentionally short `play_game` timeout, the first state poll showed `isPlaying: true` but `isPlayerLoopAdvancing: false`; later gameplay commands and screenshots still worked.
+   - Expected: `play_game` should survive/recover from reload and return the actual post-transition state, or explicitly return an accepted/transitional result.
+
+6. `stop_game` still returns a contradictory immediate state.
+   - `stop_game` returned `status: "success"` and `message: "Exited play mode"`, but the included `state.isPlaying` was still `true`.
+   - A follow-up `get_editor_state` poll returned `isPlaying: false`.
+   - This is the same stale-state issue as previous retests.
+
+7. Game screenshot capture worked for this UI case, with caveat.
+   - `capture_screenshot` with `captureMode: "game"`, `includeUI: true`, `810x1440` succeeded repeatedly.
+   - Result still reported `viewType: "Camera"` and `message: "Game View screenshot captured via Camera fallback"`.
+   - The capture included Screen Space Camera UI after the game scene was changed away from Screen Space Overlay, so this path was usable for the retest.
+
+8. Test and log checks worked through direct bridge.
+   - `run_tests` started a focused EditMode test and `get_test_results` returned one passing test:
+     `BottomlessWell.Tests.CoreSystemsTests.WellControllerDoesNotUseUiIconFallbacksForWorldMechanismSprites`.
+   - Final `read_logs` for `Error` and `Exception` returned zero entries.
+   - Final `get_editor_state` returned Edit Mode with `isPlaying: false`, `isCompiling: false`, and `isUpdating: false`.
+
+Not observed in this pass:
+- No current Unity error/exception logs after the final rebuild/reveal test.
+- No new immutable package mutation warning was observed during this focused gameplay-screen pass.
+- No new AssetImportWorker crash was observed during the final checks.
+
+Current remaining blockers from this retest:
+- Hosted MCP tool transport in the Codex session still fails with `Transport closed`, even while direct Unity MCP bridge commands succeed.
+- Menu-triggered domain reloads need clearer transitional/retry handling.
+- Play Mode entry still needs robust response/reconnect semantics.
+- Stop Play Mode still needs final-state polling before returning success.
+
 ## Retest After Main Update 6
 
 Retested: 2026-06-14

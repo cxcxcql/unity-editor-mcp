@@ -62,6 +62,10 @@ describe('Server', () => {
       assert.ok(testSetup.server);
       assert.ok(testSetup.unityConnection);
     });
+
+    it('should pass custom configuration to the Unity connection', () => {
+      assert.equal(testSetup.unityConnection.config, mockConfig);
+    });
   });
 
   describe('Tool functionality', () => {

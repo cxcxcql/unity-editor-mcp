@@ -97,6 +97,39 @@ unity-editor-mcp doctor --allow-single-instance-fallback
 unity-editor-mcp doctor --json
 ```
 
+### Durable Local Daemon
+
+By default, the stdio MCP entrypoint is a thin shim. It starts or discovers a local Streamable HTTP daemon, and the daemon owns the long-lived Unity TCP connection, auth-token refresh, reconnects, and command queue. This keeps stdio compatibility for MCP clients while avoiding stale wrapper connections after Unity reloads or Codex session transport resets.
+
+Manual commands:
+
+```bash
+unity-editor-mcp daemon
+unity-editor-mcp doctor --json
+unity-editor-mcp cleanup-stale
+unity-editor-mcp cleanup-stale --json
+```
+
+The daemon registry lives at `~/.unity-editor-mcp/daemon.json` by default and records `pid`, `port`, `packageVersion`, `gitHead`, `entrypoint`, start/heartbeat timestamps, selected Unity instance, and the last daemon error. Startup uses `daemon.lock` to prevent concurrent stdio shims from spawning duplicate ephemeral-port daemons, and detached daemon stdout/stderr goes to `daemon.log`. `cleanup-stale` removes stale locks and only signals processes validated through this registry and a matching Unity MCP daemon command line; it does not run broad `kill node` cleanup.
+
+Daemon and recovery knobs:
+
+```bash
+UNITY_MCP_USE_DAEMON=false
+UNITY_MCP_DAEMON_PORT=0
+UNITY_MCP_DAEMON_REGISTRY_DIR=$HOME/.unity-editor-mcp
+UNITY_MCP_DAEMON_AUTOSTART=true
+UNITY_MCP_DAEMON_STARTUP_TIMEOUT_MS=10000
+UNITY_MCP_DAEMON_STALE_AFTER_MS=30000
+UNITY_MCP_DAEMON_MAX_BODY_BYTES=1048576
+UNITY_MCP_PLAY_MODE_RECOVERY_TIMEOUT_MS=15000
+UNITY_MCP_PLAY_MODE_POLL_INTERVAL_MS=250
+UNITY_MCP_PLAY_MODE_STATE_COMMAND_TIMEOUT_MS=1000
+UNITY_MCP_ACTIVATE_UNITY_ON_PLAYMODE_FREEZE=false
+```
+
+`play_game` waits for usable Play Mode by default, meaning Unity reports `isPlaying=true` and the player loop is advancing. Pass `waitForPlayerLoop:false` only when a caller needs the older transitional behavior.
+
 ## Available Tools
 
 ### System & Core (3 tools)

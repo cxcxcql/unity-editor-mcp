@@ -7,6 +7,8 @@ const cliWorkspaceId = getCliArgValue(['--workspace-id', '--unity-workspace-id']
 const cliAllowSingleInstanceFallback = hasCliFlag(['--allow-single-instance-fallback', '--unity-allow-single-instance-fallback']);
 const cliPort = getCliArgValue(['--port', '--unity-port']);
 const explicitPortValue = process.env.UNITY_PORT || cliPort;
+const cliDaemonPort = getCliArgValue(['--daemon-port', '--mcp-daemon-port']);
+const cliDaemonRegistryDir = getCliArgValue(['--daemon-registry-dir', '--mcp-daemon-registry-dir']);
 
 /**
  * Configuration for Unity Editor MCP Server
@@ -38,6 +40,28 @@ export const config = {
     name: 'unity-editor-mcp-server',
     version: '0.1.0',
     description: 'MCP server for Unity Editor integration',
+  },
+
+  daemon: {
+    enabled: process.env.UNITY_MCP_USE_DAEMON !== 'false',
+    host: process.env.UNITY_MCP_DAEMON_HOST || '127.0.0.1',
+    port: parseInt(process.env.UNITY_MCP_DAEMON_PORT || cliDaemonPort, 10) || 0,
+    registryDir: process.env.UNITY_MCP_DAEMON_REGISTRY_DIR || cliDaemonRegistryDir || path.join(os.homedir(), '.unity-editor-mcp'),
+    autoStart: process.env.UNITY_MCP_DAEMON_AUTOSTART !== 'false',
+    startupTimeoutMs: parseInt(process.env.UNITY_MCP_DAEMON_STARTUP_TIMEOUT_MS, 10) || 10000,
+    healthTimeoutMs: parseInt(process.env.UNITY_MCP_DAEMON_HEALTH_TIMEOUT_MS, 10) || 1000,
+    pollIntervalMs: parseInt(process.env.UNITY_MCP_DAEMON_POLL_INTERVAL_MS, 10) || 250,
+    heartbeatMs: parseInt(process.env.UNITY_MCP_DAEMON_HEARTBEAT_MS, 10) || 5000,
+    staleAfterMs: parseInt(process.env.UNITY_MCP_DAEMON_STALE_AFTER_MS, 10) || 30000,
+    maxBodyBytes: parseInt(process.env.UNITY_MCP_DAEMON_MAX_BODY_BYTES, 10) || 1048576
+  },
+
+  playModeRecovery: {
+    timeoutMs: parseInt(process.env.UNITY_MCP_PLAY_MODE_RECOVERY_TIMEOUT_MS, 10) || 15000,
+    stopTransitionTimeoutMs: parseInt(process.env.UNITY_MCP_PLAY_MODE_STOP_TIMEOUT_MS, 10) || 10000,
+    pollIntervalMs: parseInt(process.env.UNITY_MCP_PLAY_MODE_POLL_INTERVAL_MS, 10) || 250,
+    stateCommandTimeoutMs: parseInt(process.env.UNITY_MCP_PLAY_MODE_STATE_COMMAND_TIMEOUT_MS, 10) || 1000,
+    activateUnityOnFreeze: parseBoolean(process.env.UNITY_MCP_ACTIVATE_UNITY_ON_PLAYMODE_FREEZE)
   },
   
   // Logging settings

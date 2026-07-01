@@ -1,7 +1,7 @@
 import net from 'net';
 import { EventEmitter } from 'events';
 import { config, logger } from './config.js';
-import { resolveUnityEndpoint } from './unityDiscovery.js';
+import { resolveUnityEndpoint, readUnityInstances } from './unityDiscovery.js';
 
 /**
  * Manages TCP connection to Unity Editor
@@ -467,7 +467,7 @@ export class UnityConnection extends EventEmitter {
   async runQueuedCommand(type, params, options = {}) {
     this.commandInFlight = true;
     try {
-      return await this.sendCommandNow(type, params, options);
+      return await this.sendCommandWithAuthRecovery(type, params, options);
     } finally {
       this.commandInFlight = false;
       this.runNextQueuedCommand();
@@ -483,11 +483,39 @@ export class UnityConnection extends EventEmitter {
     this.runQueuedCommand(next.type, next.params, next.options).then(next.resolve, next.reject);
   }
 
+  async sendCommandWithAuthRecovery(type, params = {}, options = {}) {
+    const maxAttempts = Math.max(1, Math.floor(options.authRetryAttempts || this.config.unity.authRetryAttempts || 2));
+    let lastError = null;
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+      try {
+        return await this.sendCommandNow(type, params, options);
+      } catch (error) {
+        lastError = error;
+        if (!isAuthFailureError(error) || attempt >= maxAttempts) {
+          throw error;
+        }
+
+        logger.warn(`[Unity] Command ${type} failed with AUTH_FAILED; refreshing Unity endpoint before retry`);
+        await this.recoverFromAuthFailure();
+      }
+    }
+
+    throw lastError;
+  }
+
   async sendCommandNow(type, params = {}, options = {}) {
     if (!this.connected) {
       logger.error('[Unity] Cannot send command - not connected');
       throw new Error('Not connected to Unity');
     }
+
+    // Unity rotates its per-session auth token on every domain reload (recompile / entering or exiting
+    // play mode) while keeping the same pid/port and the TCP socket alive. Refresh the cached token from
+    // the registry before each command, otherwise every command after a reload fails with AUTH_FAILED.
+    await this.refreshAuthTokenFromRegistry();
+    await this.ensureAuthenticatedEndpoint();
 
     const id = String(++this.commandId);
     const command = {
@@ -519,6 +547,12 @@ export class UnityConnection extends EventEmitter {
         resolve: (data) => {
           logger.info(`[Unity] Command ${id} resolved successfully`);
           clearTimeout(timeout);
+          const authError = createAuthFailureError(data);
+          if (authError) {
+            reject(authError);
+            return;
+          }
+
           resolve(data);
         },
         reject: (error) => {
@@ -551,6 +585,77 @@ export class UnityConnection extends EventEmitter {
     });
   }
 
+  async recoverFromAuthFailure() {
+    const previousEndpoint = this.endpoint
+      ? {
+          host: this.endpoint.host,
+          port: this.endpoint.port,
+          authToken: this.endpoint.authToken
+        }
+      : null;
+    const attempts = Math.max(1, Math.floor(this.config.unity.authRefreshRetryAttempts || 5));
+    const delayMs = Math.max(0, Math.floor(this.config.unity.authRefreshRetryDelayMs || 100));
+
+    for (var attempt = 0; attempt < attempts; attempt++)
+    {
+      await this.refreshAuthTokenFromRegistry();
+      if (this.endpoint?.authToken && this.endpoint.authToken !== previousEndpoint?.authToken) {
+        return;
+      }
+
+      if (delayMs > 0 && attempt < attempts - 1) {
+        await sleep(delayMs);
+      }
+    }
+
+    this.endpoint = null;
+    const endpoint = await this.resolveEndpoint();
+    if (!previousEndpoint || !endpoint) {
+      return;
+    }
+
+    if (Number(endpoint.port) !== Number(previousEndpoint.port)) {
+      const socket = this.socket;
+      this.connected = false;
+      this.socket = null;
+      this.messageBuffer = Buffer.alloc(0);
+      if (socket) {
+        socket.removeAllListeners();
+        socket.destroy();
+      }
+      await this.connect();
+    }
+  }
+
+  async ensureAuthenticatedEndpoint() {
+    if (this.endpoint?.authToken || this.config.unity.discovery?.enabled === false) {
+      return;
+    }
+
+    const previousEndpoint = this.endpoint
+      ? {
+          host: this.endpoint.host,
+          port: this.endpoint.port
+        }
+      : null;
+    const endpoint = await this.resolveEndpoint();
+    if (!previousEndpoint || !endpoint) {
+      return;
+    }
+
+    if (Number(endpoint.port) !== Number(previousEndpoint.port)) {
+      const socket = this.socket;
+      this.connected = false;
+      this.socket = null;
+      this.messageBuffer = Buffer.alloc(0);
+      if (socket) {
+        socket.removeAllListeners();
+        socket.destroy();
+      }
+      await this.connect();
+    }
+  }
+
   closeTimedOutConnection(timeoutError) {
     const socket = this.socket;
     this.connected = false;
@@ -572,6 +677,29 @@ export class UnityConnection extends EventEmitter {
     if (socket) {
       socket.removeAllListeners();
       socket.destroy();
+    }
+  }
+
+  /**
+   * Refreshes the cached per-session auth token from the Unity instance registry. Unity regenerates the
+   * token on each domain reload while keeping the same pid/port, so the cached token must be re-read or
+   * commands fail with AUTH_FAILED until the bridge is restarted.
+   */
+  async refreshAuthTokenFromRegistry() {
+    try {
+      const endpoint = this.endpoint;
+      if (!endpoint?.port || !endpoint?.instance?.pid) return;
+      const instances = await readUnityInstances({ includeStale: true });
+      const fresh = instances.find(
+        (i) => Number(i.port) === Number(endpoint.port) && Number(i.pid) === Number(endpoint.instance.pid)
+      );
+      if (fresh?.authToken && fresh.authToken !== endpoint.authToken) {
+        logger.info('[Unity] auth token rotated (domain reload) — refreshed from registry');
+        this.endpoint.authToken = fresh.authToken;
+        this.endpoint.instance = fresh;
+      }
+    } catch (err) {
+      logger.warn?.(`[Unity] auth token refresh failed: ${err?.message ?? err}`);
     }
   }
 
@@ -624,11 +752,53 @@ function createCommandTimeoutError(type, id, timeoutMs) {
   return error;
 }
 
+function createAuthFailureError(payload) {
+  if (!isAuthFailurePayload(payload)) {
+    return null;
+  }
+
+  const error = new Error(payload?.message || payload?.error || 'Invalid or missing Unity Editor MCP auth token');
+  error.code = 'AUTH_FAILED';
+  if (payload?.details !== undefined) {
+    error.details = payload.details;
+  }
+  return error;
+}
+
+function isAuthFailureError(error) {
+  if (!error) {
+    return false;
+  }
+
+  return error.code === 'AUTH_FAILED' || isAuthFailurePayload(error);
+}
+
+function isAuthFailurePayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  const code = payload.code || payload.errorCode;
+  if (code === 'AUTH_FAILED') {
+    return true;
+  }
+
+  const message = String(payload.message || payload.error || '');
+  return message.includes('Unity Editor MCP auth token') && (
+    message.includes('Invalid') ||
+    message.includes('missing')
+  );
+}
+
 function normalizeTimeoutMs(value, fallback) {
   if (Number.isFinite(value) && value > 0) {
     return Math.max(1, Math.floor(value));
   }
   return fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function redactEndpoint(endpoint) {

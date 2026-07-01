@@ -1,5 +1,12 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
-import { isRecoverablePlayModeDisconnect, recoverPlayModeState } from './playModeRecovery.js';
+import {
+  PLAY_MODE_POLL_INTERVAL_MS,
+  extractState,
+  isPlayModeUsable,
+  isRecoverablePlayModeDisconnect,
+  recoverPlayModeState,
+  waitForEditorState
+} from './playModeRecovery.js';
 
 /**
  * Handler for starting Unity play mode
@@ -11,7 +18,12 @@ export class PlayToolHandler extends BaseToolHandler {
       'Start Unity play mode to test the game',
       {
         type: 'object',
-        properties: {},
+        properties: {
+          waitForPlayerLoop: {
+            type: 'boolean',
+            description: 'Wait until Unity reports the player loop is advancing before returning (default: true)'
+          }
+        },
         required: []
       }
     );
@@ -50,7 +62,31 @@ export class PlayToolHandler extends BaseToolHandler {
       throw error;
     }
     
-    // Return the result with state information
+    const state = extractState(result);
+    const shouldWaitForPlayerLoop = params.waitForPlayerLoop !== false;
+    if (shouldWaitForPlayerLoop && state.isPlaying === true && !isPlayModeUsable(state)) {
+      const verified = await waitForEditorState(
+        this.unityConnection,
+        (candidateState) => isPlayModeUsable(candidateState),
+        {
+          timeoutMs: context.playModeRecovery?.timeoutMs,
+          pollIntervalMs: context.playModeRecovery?.pollIntervalMs ?? PLAY_MODE_POLL_INTERVAL_MS,
+          commandTimeoutMs: context.playModeRecovery?.commandTimeoutMs,
+          timeoutCode: 'PLAY_MODE_PLAYER_LOOP_TIMEOUT',
+          timeoutMessage: 'Timed out waiting for Unity player loop to advance after entering play mode'
+        }
+      );
+
+      return {
+        ...result,
+        state: verified.state,
+        polledUntilPlayerLoopAdvancing: true,
+        attempts: verified.attempts,
+        elapsedMs: verified.elapsedMs,
+        recoveryActions: verified.recoveryActions
+      };
+    }
+
     return result;
   }
 }

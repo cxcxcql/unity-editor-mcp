@@ -126,17 +126,22 @@ describe('MCP modernization contracts', () => {
       }
     });
     const writes = [];
+    let resolveWrite;
+    const firstWrite = new Promise((resolve) => {
+      resolveWrite = resolve;
+    });
     connection.connected = true;
     connection.endpoint = { authToken: 'secret-token' };
     connection.socket = {
       write: mock.fn((buffer, callback) => {
         writes.push(buffer);
+        resolveWrite(buffer);
         callback?.();
       })
     };
 
     const commandPromise = connection.sendCommand('ping', {});
-    const command = parseFramedMessage(writes[0]);
+    const command = parseFramedMessage(await firstWrite);
     assert.equal(command.authToken, 'secret-token');
     assert.equal(connection.getConnectionInfo().endpoint.authToken, '[redacted]');
 

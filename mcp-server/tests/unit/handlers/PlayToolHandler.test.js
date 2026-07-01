@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { PlayToolHandler } from '../../../src/handlers/playmode/PlayToolHandler.js';
+import { isRecoverablePlayModeDisconnect } from '../../../src/handlers/playmode/playModeRecovery.js';
 import { createMockUnityConnection } from '../../utils/test-helpers.js';
 
 describe('PlayToolHandler', () => {
@@ -34,6 +35,17 @@ describe('PlayToolHandler', () => {
   describe('validate', () => {
     it('should pass with empty parameters', () => {
       assert.doesNotThrow(() => handler.validate({}));
+    });
+  });
+
+  describe('play mode recovery classification', () => {
+    it('should classify refused connections and auth reloads as recoverable handoff failures', () => {
+      assert.equal(isRecoverablePlayModeDisconnect(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:6400'), {
+        code: 'ECONNREFUSED'
+      })), true);
+      assert.equal(isRecoverablePlayModeDisconnect(Object.assign(new Error('AUTH_FAILED'), {
+        code: 'AUTH_FAILED'
+      })), true);
     });
   });
 
@@ -73,6 +85,62 @@ describe('PlayToolHandler', () => {
       
       assert.equal(result.message, 'Already in play mode');
       assert.equal(result.state.isPlaying, true);
+    });
+
+    it('should poll until the player loop advances after immediate play success', async () => {
+      const calls = [];
+      let statePolls = 0;
+      mockConnection = {
+        isConnected: mock.fn(() => true),
+        connect: mock.fn(async () => {
+          calls.push(['connect']);
+        }),
+        sendCommand: mock.fn(async (command, params, options) => {
+          calls.push([command, params, options]);
+          if (command === 'play_game') {
+            return {
+              status: 'success',
+              message: 'Entered play mode',
+              state: {
+                isPlaying: true,
+                isPaused: false,
+                frameCount: 1,
+                time: 0,
+                isPlayerLoopAdvancing: false
+              }
+            };
+          }
+
+          statePolls++;
+          return {
+            status: 'success',
+            state: {
+              isPlaying: true,
+              isPaused: false,
+              frameCount: statePolls >= 2 ? 60 : 1,
+              time: statePolls >= 2 ? 1 : 0,
+              isPlayerLoopAdvancing: statePolls >= 2
+            }
+          };
+        })
+      };
+      handler = new PlayToolHandler(mockConnection);
+
+      const result = await handler.execute({}, {
+        playModeRecovery: {
+          timeoutMs: 100,
+          pollIntervalMs: 0,
+          commandTimeoutMs: 10
+        }
+      });
+
+      assert.equal(result.state.isPlayerLoopAdvancing, true);
+      assert.equal(result.polledUntilPlayerLoopAdvancing, true);
+      assert.deepEqual(calls, [
+        ['play_game', {}, undefined],
+        ['get_editor_state', {}, { timeoutMs: 10 }],
+        ['get_editor_state', {}, { timeoutMs: 10 }]
+      ]);
     });
 
     it('should throw error if not connected', async () => {

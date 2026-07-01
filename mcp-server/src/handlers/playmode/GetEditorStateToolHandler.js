@@ -1,5 +1,8 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
 import { PLAY_MODE_POLL_INTERVAL_MS, waitForEditorState } from './playModeRecovery.js';
+import { getServerMetadata } from '../../core/serverMetadata.js';
+import { config } from '../../core/config.js';
+import { readDaemonRegistry, summarizeDaemonRegistry } from '../../core/daemonRegistry.js';
 
 const EDITOR_STATE_RECOVERY_TIMEOUT_MS = 10000;
 
@@ -50,7 +53,30 @@ export class GetEditorStateToolHandler extends BaseToolHandler {
       throw error;
     }
     
-    // Return the state information
-    return result;
+    return {
+      ...result,
+      server: getServerMetadata(),
+      connection: this.unityConnection.getConnectionInfo ? this.unityConnection.getConnectionInfo() : undefined,
+      daemon: await getDaemonSourceMetadata(),
+      recovery: {
+        attempts: verified.attempts,
+        elapsedMs: verified.elapsedMs,
+        usedPolling: verified.attempts > 1,
+        recoveryActions: verified.recoveryActions
+      }
+    };
   }
+}
+
+async function getDaemonSourceMetadata() {
+  const registry = await readDaemonRegistry({ registryDir: config.daemon.registryDir }).catch(() => null);
+  const summary = summarizeDaemonRegistry(registry, {
+    staleAfterMs: config.daemon.staleAfterMs
+  });
+  const lastSeenMs = registry?.lastSeen ? Date.parse(registry.lastSeen) : NaN;
+
+  return {
+    ...summary,
+    registryAgeMs: Number.isFinite(lastSeenMs) ? Date.now() - lastSeenMs : null
+  };
 }
