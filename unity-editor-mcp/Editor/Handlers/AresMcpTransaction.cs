@@ -57,8 +57,8 @@ namespace UnityEditorMCP.Handlers
             string approvedChangeSetHash, string approvalToken, string idempotencyKey)
         {
             var ops = parameters?["recipe"]?["operations"] as JArray;
-            if (ops == null || !ops.Any())
-                return new { error = "recipe.operations is required and must be a non-empty array" };
+            if (ops == null)
+                return new { error = "recipe.operations is required" };
 
             // 乐观锁：比对 Scene Hash
             string actualHash = GetSceneHash(null);
