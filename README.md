@@ -106,6 +106,15 @@ unity-editor-mcp doctor --allow-single-instance-fallback
 unity-editor-mcp doctor --json
 ```
 
+## GPT / Codex 使用适配器
+
+[claude-code/unity-mcp-adapter.mjs](claude-code/unity-mcp-adapter.mjs) 是一个零依赖的 MCP stdio 适配器，除了 Claude Code，也可用于 **Codex CLI** 和 **ChatGPT 桌面版**：
+
+- **Codex CLI**：`codex mcp add unity -- node <适配器绝对路径>`，或编辑 `~/.codex/config.toml` 添加 `[mcp_servers.unity]`（下划线格式）
+- **ChatGPT 桌面版**：Settings → Connections → MCP servers → Add → 传输方式 STDIO → Command `node`，Args 填适配器路径（本地 stdio 仅桌面版支持）
+
+完整的配置示例（Codex TOML、ChatGPT `mcp.json`、环境变量与常见问题）见 [codex/](codex/) 目录。
+
 ## 可用工具
 
 Unity Editor MCP 提供 **63 个工具**，覆盖 **11 个类别**，实现完整的 Unity 编辑器自动化：

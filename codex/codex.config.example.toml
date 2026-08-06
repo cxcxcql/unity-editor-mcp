@@ -1,0 +1,21 @@
+# Codex CLI MCP 配置示例
+#
+# 把以下片段合并到你的 Codex 配置文件中：
+#   - 用户级（所有项目）：~/.codex/config.toml
+#   - 项目级（仅受信任项目）：<项目根>/.codex/config.toml
+#
+# 注意：Codex 使用下划线命名 [mcp_servers.*]，不是 [mcpServers.*]。
+# 也可用命令行添加：codex mcp add unity -- node <本文件所在目录>/unity-mcp-adapter.mjs
+
+[mcp_servers.unity]
+command = "node"
+# 改成你机器上 codex/unity-mcp-adapter.mjs 的绝对路径
+args = ["/abs/path/to/codex/unity-mcp-adapter.mjs"]
+enabled = true
+# 首次连接 Unity 大场景较慢，必要时加大超时
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+
+# 可选：通过环境变量精确匹配某个 Unity 项目（多实例时推荐）
+# [mcp_servers.unity.env]
+# UNITY_MCP_PROJECT_PATH = "C:/path/to/YourUnityProject"

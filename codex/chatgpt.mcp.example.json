@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "unity": {
+      "command": "node",
+      "args": ["C:/abs/path/to/codex/unity-mcp-adapter.mjs"]
+    }
+  }
+}
