@@ -7,6 +7,8 @@
 
 > ⚠️ **This project is in beta and under heavy development.** Features and APIs may change. Use at your own discretion.
 
+> 🔧 **This fork targets Unity 2020.3 LTS** — adapted from [ozankasikci/unity-editor-mcp](https://github.com/ozankasikci/unity-editor-mcp) for Unity 2020.3 compatibility, plus a Claude Code/Codex MCP stdio adapter (`claude-code/unity-mcp-adapter.mjs`) with batch tools (`batch_create_gameobjects`, `batch_instantiate_prefab`).
+
 Unity Editor MCP (Model Context Protocol) enables AI assistants like Claude and Cursor to interact directly with the Unity Editor, allowing for AI-assisted game development and automation.
 
 ## 🚀 Key Features
@@ -42,7 +44,7 @@ In Unity:
 
 1. Open **Window → Package Manager**
 2. Click **"+"** → **"Add package from git URL..."**
-3. Paste: `https://github.com/cxcxcql/unity-editor-mcp.git?path=unity-editor-mcp#unity-2020.3-compat`
+3. Paste: `https://github.com/cxcxcql/unity-editor-mcp.git?path=unity-editor-mcp#main`
 4. Click **Add**
 
 > ✨ Unity will automatically start the MCP bridge. It uses port 6400 when available and falls back to a free local port when multiple Unity instances are open.
