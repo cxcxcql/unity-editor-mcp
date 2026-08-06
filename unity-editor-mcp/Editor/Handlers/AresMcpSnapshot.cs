@@ -206,7 +206,12 @@ namespace UnityEditorMCP.Handlers
                 string logPath = Application.consoleLogPath;
                 if (File.Exists(logPath))
                 {
-                    string[] lines = File.ReadAllLines(logPath);
+                    string[] lines;
+                    using (var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (var sr = new StreamReader(fs))
+                    {
+                        lines = sr.ReadToEnd().Split(new[] { '\n' }, StringSplitOptions.None);
+                    }
                     int eCount = 0, wCount = 0;
                     for (int i = lines.Length - 1; i >= 0 && (eCount + wCount) < recentLogs; i--)
                     {
