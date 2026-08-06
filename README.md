@@ -2,60 +2,59 @@
 
 [![CI](https://github.com/ozankasikci/unity-editor-mcp/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/ozankasikci/unity-editor-mcp/actions/workflows/test-coverage.yml)
 [![codecov](https://codecov.io/gh/ozankasikci/unity-editor-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/ozankasikci/unity-mcp)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm version](https://img.shields.io/npm/v/unity-editor-mcp)](https://www.npmjs.com/package/unity-editor-mcp)
 
-> ⚠️ **This project is in beta and under heavy development.** Features and APIs may change. Use at your own discretion.
+> ⚠️ **本项目处于 Beta 阶段，正在快速开发中。** 功能和 API 可能随时变化，请自行评估风险后使用。
 
-> 🔧 **This fork targets Unity 2020.3 LTS** — adapted from [ozankasikci/unity-editor-mcp](https://github.com/ozankasikci/unity-editor-mcp) for Unity 2020.3 compatibility, plus a Claude Code/Codex MCP stdio adapter (`claude-code/unity-mcp-adapter.mjs`) with batch tools (`batch_create_gameobjects`, `batch_instantiate_prefab`).
+> 🔧 **本 fork 面向 Unity 2020.3 LTS** — 改编自 [ozankasikci/unity-editor-mcp](https://github.com/ozankasikci/unity-editor-mcp)，适配 Unity 2020.3，并附带 Claude Code/Codex MCP stdio 适配器（`claude-code/unity-mcp-adapter.mjs`）与批量工具（`batch_create_gameobjects`、`batch_instantiate_prefab`）。
 
-Unity Editor MCP (Model Context Protocol) enables AI assistants like Claude and Cursor to interact directly with the Unity Editor, allowing for AI-assisted game development and automation.
+Unity Editor MCP（Model Context Protocol）让 Claude、Cursor 等 AI 助手能够直接与 Unity 编辑器交互，实现 AI 辅助游戏开发与自动化。
 
-## 🚀 Key Features
+## 🚀 核心特性
 
-- **🎮 GameObject Management**: Create primitives, modify transforms, manage hierarchy, and delete objects
-- **🔧 Component System**: Add, remove, modify, and list components on GameObjects with full property control
-- **🎭 Prefab Workflow**: Complete prefab mode editing - open, modify, save, and exit with override management
-- **🔍 Smart Search**: Find GameObjects by name, tag, layer, or component type with exact/partial matching
-- **📊 Scene Analysis**: Analyze scene composition, component statistics, and prefab connections
-- **🎯 Component Inspection**: Get component values, find objects by component, trace references between objects
-- **🎬 Scene Control**: Create, load, save scenes, manage build settings, and work with multiple scenes
-- **🏃 Play Mode Testing**: Start, pause, and stop play mode, check editor state and compilation status
-- **🖼️ Screenshot Capture**: Take screenshots of Game View or Scene View with analysis capabilities
-- **🎨 Asset Management**: Create and modify prefabs, materials, scripts with comprehensive property control
-- **🖱️ UI Automation**: Interact with Unity UI elements programmatically for testing and automation
-- **📝 Console Integration**: Read Unity console logs filtered by type with enhanced debugging features
-- **🔄 Editor Operations**: Refresh assets, execute menu items, and trigger recompilation
+- **🎮 GameObject 管理**：创建 primitive、修改 transform、管理层级、删除对象
+- **🔧 组件系统**：为 GameObject 添加、移除、修改、列出组件，支持完整属性控制
+- **🎭 Prefab 工作流**：完整的 prefab 模式编辑——打开、修改、保存、退出，支持覆盖管理
+- **🔍 智能搜索**：按名称、tag、layer 或组件类型查找 GameObject，支持精确/模糊匹配
+- **📊 场景分析**：分析场景组成、组件统计、prefab 连接
+- **🎯 组件检查**：获取组件值、按组件查找对象、追踪对象间引用
+- **🎬 场景控制**：创建、加载、保存场景，管理 Build Settings，支持多场景
+- **🏃 播放模式测试**：启动、暂停、停止播放模式，检查编辑器状态与编译状态
+- **🖼️ 截图捕获**：捕获 Game View 或 Scene View 截图并支持分析
+- **🎨 资源管理**：创建和修改 prefab、材质、脚本，提供全面的属性控制
+- **🖱️ UI 自动化**：通过编程方式与 Unity UI 元素交互，用于测试和自动化
+- **📝 控制台集成**：读取按类型过滤的 Unity 控制台日志，支持增强调试功能
+- **🔄 编辑器操作**：刷新资源、执行菜单项、触发重新编译
 
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
-### Prerequisites
+### 前置要求
 
-- ✅ Unity 2020.3 LTS or newer
-- ✅ Node.js 18.0.0 or newer  
-- ✅ Claude Desktop or Cursor
+- ✅ Unity 2020.3 LTS 或更高
+- ✅ Node.js 18.0.0 或更高
+- ✅ Claude Desktop 或 Cursor
 
-### Installation
+### 安装
 
-#### 📦 Step 1: Install Unity Package
+#### 📦 第一步：安装 Unity 包
 
-In Unity:
+在 Unity 中：
 
-1. Open **Window → Package Manager**
-2. Click **"+"** → **"Add package from git URL..."**
-3. Paste: `https://github.com/cxcxcql/unity-editor-mcp.git?path=unity-editor-mcp#main`
-4. Click **Add**
+1. 打开 **Window → Package Manager**
+2. 点击 **"+"** → **"Add package from git URL..."**
+3. 粘贴：`https://github.com/cxcxcql/unity-editor-mcp.git?path=unity-editor-mcp#main`
+4. 点击 **Add**
 
-> ✨ Unity will automatically start the MCP bridge. It uses port 6400 when available and falls back to a free local port when multiple Unity instances are open.
+> ✨ Unity 会自动启动 MCP 桥接。它优先使用端口 6400，当有多个 Unity 实例打开时会自动回退到可用的本地端口。
 
-#### ⚙️ Step 2: Configure Your MCP Client
+#### ⚙️ 第二步：配置 MCP 客户端
 
-**For Claude Desktop:**
+**Claude Desktop:**
 
-Add to your config file:
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+在配置文件中添加：
+- **macOS：** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows：** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -68,35 +67,35 @@ Add to your config file:
 }
 ```
 
-**For Cursor:**
+**Cursor：**
 
-Add the same configuration to Cursor's MCP settings
+将同样的配置添加到 Cursor 的 MCP 设置中。
 
-#### ✅ Step 3: Verify Connection
+#### ✅ 第三步：验证连接
 
-1. **Restart your MCP client** (Claude Desktop or Cursor)
-2. Check Unity Console for: `[Unity Editor MCP] Client connected`
-3. You're ready to go! 🎮
+1. **重启 MCP 客户端**（Claude Desktop 或 Cursor）
+2. 在 Unity Console 中查看：`[Unity Editor MCP] Client connected`
+3. 大功告成！🎮
 
-### Multiple Unity Instances
+### 多个 Unity 实例
 
-Unity Editor MCP now auto-discovers running Unity projects. Each Unity Editor instance writes an internal runtime registry entry under `~/.unity-editor-mcp/instances`, including its project path, process ID, port, Unity version, package version, workspace ID, Git worktree metadata, and heartbeat timestamp. You do not edit this file.
+Unity Editor MCP 现在会自动发现正在运行的 Unity 项目。每个 Unity 编辑器实例都会在 `~/.unity-editor-mcp/instances` 下写入一个内部运行时注册表条目，包含项目路径、进程 ID、端口、Unity 版本、包版本、工作区 ID、Git worktree 元数据以及心跳时间戳。你无需编辑此文件。
 
-When the Node MCP server starts, it selects the Unity instance in this order:
+当 Node MCP 服务器启动时，按以下顺序选择 Unity 实例：
 
-1. `UNITY_PORT` or `--port`, if explicitly provided
-2. `UNITY_MCP_INSTANCE_ID` or `--instance`
-3. `UNITY_PROJECT_PATH`, `UNITY_MCP_PROJECT_PATH`, or `--project`
-4. `UNITY_MCP_WORKSPACE_ID` or `--workspace-id`
-5. the Unity project inferred from the current working directory
-6. the stable workspace ID inferred from the current working directory
-7. the only live Unity MCP instance, if exactly one exists
+1. `UNITY_PORT` 或 `--port`（如果显式提供）
+2. `UNITY_MCP_INSTANCE_ID` 或 `--instance`
+3. `UNITY_PROJECT_PATH`、`UNITY_MCP_PROJECT_PATH` 或 `--project`
+4. `UNITY_MCP_WORKSPACE_ID` 或 `--workspace-id`
+5. 从当前工作目录推断出的 Unity 项目
+6. 从当前工作目录推断出的稳定工作区 ID
+7. 唯一活动的 Unity MCP 实例（如果恰好只有一个）
 
-For Git worktrees, the workspace ID is stored in Git's private worktree metadata via `git rev-parse --git-path unity-editor-mcp/workspace-id`. For non-Git projects it is stored under `Library/UnityEditorMCP/workspace-id`. It is not written to tracked Unity project files.
+对于 Git worktree，工作区 ID 存储在 Git 私有 worktree 元数据中，通过 `git rev-parse --git-path unity-editor-mcp/workspace-id` 访问。对于非 Git 项目，存储于 `Library/UnityEditorMCP/workspace-id`。不会写入被 Git 跟踪的 Unity 项目文件。
 
-If the server infers a local Unity project/workspace from the current working directory, it requires an exact project or workspace match and does not use the single-live-instance fallback. If related worktrees from the same Git repository are open but none match the current worktree, it fails closed with a `WORKTREE_MISMATCH` candidate list instead of connecting silently. To restore the old convenience fallback explicitly, set `UNITY_MCP_ALLOW_SINGLE_INSTANCE_FALLBACK=true` or pass `--allow-single-instance-fallback`.
+如果服务器从当前工作目录推断出本地 Unity 项目/工作区，则要求项目或工作区精确匹配，并且不使用单实例回退。如果同一 Git 仓库的相关 worktree 已打开但没有一个与当前 worktree 匹配，它会以 `WORKTREE_MISMATCH` 候选列表方式安全失败，而不是静默连接。要显式恢复旧的便捷回退行为，请设置 `UNITY_MCP_ALLOW_SINGLE_INSTANCE_FALLBACK=true` 或传入 `--allow-single-instance-fallback`。
 
-To inspect discovery without starting an MCP session:
+不启动 MCP 会话即可查看发现结果：
 
 ```bash
 unity-editor-mcp doctor
@@ -107,122 +106,118 @@ unity-editor-mcp doctor --allow-single-instance-fallback
 unity-editor-mcp doctor --json
 ```
 
-## Available Tools
+## 可用工具
 
-Unity Editor MCP provides **63 comprehensive tools** across 11 categories for complete Unity Editor automation:
+Unity Editor MCP 提供 **63 个工具**，覆盖 **11 个类别**，实现完整的 Unity 编辑器自动化：
 
-### System & Core Tools (3 tools)
-- **`ping`** - Test connection to Unity Editor and verify server status
-- **`read_logs`** - Read Unity console logs with filtering by type (Log, Warning, Error, etc.)
-- **`refresh_assets`** - Refresh Unity assets and optionally wait for compilation to settle
+### 系统与核心工具（3 个）
+- **`ping`** - 测试与 Unity 编辑器的连接并验证服务器状态
+- **`read_logs`** - 读取 Unity 控制台日志，支持按类型过滤（Log、Warning、Error 等）
+- **`refresh_assets`** - 刷新 Unity 资源，可选等待编译稳定
 
-### GameObject Management (5 tools)
-- **`create_gameobject`** - Create GameObjects with primitives, transforms, tags, and layers
-- **`find_gameobject`** - Find GameObjects by name, tag, layer with pattern matching
-- **`modify_gameobject`** - Modify GameObject properties (transform, name, active state, parent, etc.)
-- **`delete_gameobject`** - Delete single or multiple GameObjects with optional child handling
-- **`get_hierarchy`** - Get complete scene hierarchy with components and depth control
+### GameObject 管理（5 个）
+- **`create_gameobject`** - 创建带 primitive、transform、tag、layer 的 GameObject
+- **`find_gameobject`** - 按名称、tag、layer 查找 GameObject，支持模式匹配
+- **`modify_gameobject`** - 修改 GameObject 属性（transform、名称、激活状态、父节点等）
+- **`delete_gameobject`** - 删除单个或多个 GameObject，可选处理子对象
+- **`get_hierarchy`** - 获取完整场景层级，支持组件信息与深度控制
 
-### Component System (5 tools)
-- **`add_component`** - Add Unity components to GameObjects with initial property values
-- **`remove_component`** - Remove components from GameObjects with safety checks (prevents Transform removal)
-- **`modify_component`** - Modify component properties with support for nested properties using dot notation
-- **`list_components`** - List all components on a GameObject with type information and removability status
-- **`get_component_types`** - Discover available component types with filtering by category and addability
+### 组件系统（5 个）
+- **`add_component`** - 为 GameObject 添加组件并设置初始属性
+- **`remove_component`** - 移除组件（带安全检查，防止移除 Transform）
+- **`modify_component`** - 修改组件属性，支持点号表示法的嵌套属性
+- **`list_components`** - 列出 GameObject 上的所有组件，包含类型信息和可移除状态
+- **`get_component_types`** - 发现可用组件类型，支持按类别过滤和可添加性判断
 
-### Scene Management (5 tools)
-- **`create_scene`** - Create new scenes with build settings integration and auto-loading
-- **`load_scene`** - Load existing scenes in Single or Additive mode
-- **`save_scene`** - Save current scene with Save As functionality
-- **`list_scenes`** - List all scenes in project with filtering and build settings info
-- **`get_scene_info`** - Get detailed scene information including GameObject counts
+### 场景管理（5 个）
+- **`create_scene`** - 创建新场景，集成 Build Settings 并支持自动加载
+- **`load_scene`** - 以 Single 或 Additive 模式加载现有场景
+- **`save_scene`** - 保存当前场景，支持另存为
+- **`list_scenes`** - 列出项目中的所有场景，包含过滤和 Build Settings 信息
+- **`get_scene_info`** - 获取详细场景信息，包括 GameObject 数量
 
-### Scene Analysis (5 tools)
-- **`get_gameobject_details`** - Deep inspection of GameObjects with component details and hierarchy
-- **`analyze_scene_contents`** - Comprehensive scene statistics, composition, and performance metrics
-- **`get_component_values`** - Get all properties and values of specific components with metadata
-- **`find_by_component`** - Find GameObjects by component type with scope filtering (scene/prefabs/all)
-- **`get_object_references`** - Analyze references between objects including hierarchy and asset connections
+### 场景分析（5 个）
+- **`get_gameobject_details`** - 深度检查 GameObject，包含组件详情和层级
+- **`analyze_scene_contents`** - 全面的场景统计、组成分析和性能指标
+- **`get_component_values`** - 获取指定组件的所有属性和值，带元数据
+- **`find_by_component`** - 按组件类型查找 GameObject，支持范围过滤（scene/prefabs/all）
+- **`get_object_references`** - 分析对象间引用，包括层级和资源连接
 
-### Asset Management (11 tools)
-- **`create_prefab`** - Create prefabs from GameObjects or empty templates with overwrite options
-- **`modify_prefab`** - Modify existing prefabs with property changes and instance updates
-- **`instantiate_prefab`** - Instantiate prefabs in scenes with transform and parenting options
-- **`open_prefab`** - Open prefabs in Unity's prefab mode for detailed editing with focus and isolation
-- **`exit_prefab_mode`** - Exit prefab mode with optional save/discard changes
-- **`save_prefab`** - Save prefab changes in prefab mode or apply instance overrides to prefab assets
-- **`create_material`** - Create new materials with shader assignment and property configuration
-- **`modify_material`** - Modify existing materials with shader changes and property updates
-- **`manage_asset_import_settings`** - Manage Unity asset import settings (get, modify, apply presets, reimport)
-- **`manage_asset_database`** - Manage Unity Asset Database operations (find, info, create folders, move, copy, delete, refresh)
-- **`analyze_asset_dependencies`** - Analyze Unity asset dependencies (get dependencies, dependents, circular deps, unused assets, size impact)
+### 资源管理（11 个）
+- **`create_prefab`** - 从 GameObject 或空模板创建 prefab，支持覆盖选项
+- **`modify_prefab`** - 修改现有 prefab，支持属性变更和实例更新
+- **`instantiate_prefab`** - 在场景中实例化 prefab，支持变换与父子设置
+- **`open_prefab`** - 在 Unity prefab 模式中打开 prefab 进行精细编辑，支持聚焦与隔离
+- **`exit_prefab_mode`** - 退出 prefab 模式，可选保存/放弃更改
+- **`save_prefab`** - 在 prefab 模式保存更改，或将实例覆盖应用到 prefab 资源
+- **`create_material`** - 创建新材质，支持着色器分配和属性配置
+- **`modify_material`** - 修改现有材质，支持着色器更换和属性更新
+- **`manage_asset_import_settings`** - 管理 Unity 资源导入设置（获取、修改、应用预设、重新导入）
+- **`manage_asset_database`** - 管理 Unity Asset Database 操作（查找、信息、建文件夹、移动、复制、删除、刷新）
+- **`analyze_asset_dependencies`** - 分析 Unity 资源依赖（依赖项、被依赖、循环依赖、未使用资源、体积影响）
 
-### Script Management (6 tools)
-- **`create_script`** - Create new C# scripts with templates and namespace management
-- **`read_script`** - Read script file contents with syntax highlighting information
-- **`update_script`** - Modify existing scripts with content replacement and validation
-- **`delete_script`** - Delete script files with dependency checking and confirmation
-- **`list_scripts`** - List all scripts in project with filtering and metadata
-- **`validate_script`** - Validate script syntax and check for compilation errors
+### 脚本管理（6 个）
+- **`create_script`** - 创建新 C# 脚本，支持模板和命名空间管理
+- **`read_script`** - 读取脚本文件内容，带语法高亮信息
+- **`update_script`** - 修改现有脚本，支持内容替换和校验
+- **`delete_script`** - 删除脚本文件，带依赖检查和确认
+- **`list_scripts`** - 列出项目中的所有脚本，支持过滤和元数据
+- **`validate_script`** - 校验脚本语法并检查编译错误
 
-### Play Mode Controls (4 tools)
-- **`play_game`** - Start Unity play mode for testing and interaction
-- **`pause_game`** - Pause or resume Unity play mode
-- **`stop_game`** - Stop Unity play mode and return to edit mode
-- **`get_editor_state`** - Get current Unity editor state (play mode, pause, compilation status)
+### 播放模式控制（4 个）
+- **`play_game`** - 启动 Unity 播放模式，用于测试和交互
+- **`pause_game`** - 暂停或恢复 Unity 播放模式
+- **`stop_game`** - 停止 Unity 播放模式并返回编辑模式
+- **`get_editor_state`** - 获取当前 Unity 编辑器状态（播放模式、暂停、编译状态）
 
-### UI Automation (5 tools)
-- **`find_ui_elements`** - Locate UI elements in scene hierarchy with filtering
-- **`click_ui_element`** - Simulate clicking on UI elements (buttons, toggles, etc.)
-- **`get_ui_element_state`** - Get detailed UI element state and interaction capabilities
-- **`set_ui_element_value`** - Set values for UI input elements (sliders, input fields, etc.)
-- **`simulate_ui_input`** - Execute complex UI interaction sequences
+### UI 自动化（5 个）
+- **`find_ui_elements`** - 在场景层级中定位 UI 元素，支持过滤
+- **`click_ui_element`** - 模拟点击 UI 元素（按钮、开关等）
+- **`get_ui_element_state`** - 获取详细的 UI 元素状态和交互能力
+- **`set_ui_element_value`** - 为 UI 输入元素设置值（滑块、输入框等）
+- **`simulate_ui_input`** - 执行复杂的 UI 交互序列
 
-### Editor Operations (5 tools)
-- **`execute_menu_item`** - Execute Unity menu items programmatically with safety checks
-- **`clear_console`** - Clear Unity console logs with optional filtering
-- **`enhanced_read_logs`** - Advanced log reading with search, filtering, and export capabilities
-- **`capture_screenshot`** - Take screenshots of Game View or Scene View with custom resolution and encoding
-- **`analyze_screenshot`** - Analyze screenshot content with basic image analysis capabilities
+### 编辑器操作（5 个）
+- **`execute_menu_item`** - 以编程方式执行 Unity 菜单项，带安全检查
+- **`clear_console`** - 清除 Unity 控制台日志，可选过滤
+- **`enhanced_read_logs`** - 高级日志读取，支持搜索、过滤和导出
+- **`capture_screenshot`** - 捕获 Game View 或 Scene View 截图，支持自定义分辨率和编码
+- **`analyze_screenshot`** - 分析截图内容，提供基础图像分析能力
 
-### Editor Control & Automation (9 tools)
-- **`manage_tags`** - Manage Unity project tags (add, remove, list)
-- **`manage_layers`** - Manage Unity project layers (add, remove, list, convert index/name)
-- **`manage_selection`** - Manage Unity Editor selection (get, set, clear, get details)
-- **`manage_windows`** - Manage Unity Editor windows (list, focus, get state)
-- **`manage_tools`** - Manage Unity Editor tools and plugins (list, activate, deactivate, refresh)
-- **`start_compilation_monitoring`** - Start monitoring Unity compilation with real-time error detection
-- **`stop_compilation_monitoring`** - Stop compilation monitoring and get final status
-- **`get_compilation_state`** - Get current Unity compilation state and errors
-- **`wait_for_compilation`** - Wait for Unity compilation/domain reload to settle and return final messages
+### 编辑器控制与自动化（9 个）
+- **`manage_tags`** - 管理 Unity 项目标签（添加、移除、列出）
+- **`manage_layers`** - 管理 Unity 项目层级（添加、移除、列出、索引/名称转换）
+- **`manage_selection`** - 管理 Unity 编辑器选中项（获取、设置、清除、获取详情）
+- **`manage_windows`** - 管理 Unity 编辑器窗口（列出、聚焦、获取状态）
+- **`manage_tools`** - 管理 Unity 编辑器工具和插件（列出、启用、禁用、刷新）
+- **`start_compilation_monitoring`** - 开始监控 Unity 编译，实时错误检测
+- **`stop_compilation_monitoring`** - 停止编译监控并获取最终状态
+- **`get_compilation_state`** - 获取当前 Unity 编译状态和错误
+- **`wait_for_compilation`** - 等待 Unity 编译/域重载完成并返回最终信息
 
 
-## Troubleshooting
+## 故障排查
 
-### Unity TCP Listener Issues
+### Unity TCP 监听问题
 
-If you see "Port 6400 is already in use":
-1. This is expected when another Unity instance already owns the default port
-2. The package will fall back to an available local port automatically
-3. Run `unity-editor-mcp doctor` to see which project and port will be selected
+如果你看到 "Port 6400 is already in use"：
+1. 这是正常现象——另一个 Unity 实例已占用默认端口
+2. 包会自动回退到可用的本地端口
+3. 运行 `unity-editor-mcp doctor` 查看将选择哪个项目和端口
 
-### Connection Failed
+### 连接失败
 
-1. Ensure Unity Editor is running with the package installed
-2. Check the Unity console for error messages
-3. Verify the Node.js server is running
-4. Check your MCP client configuration path is absolute
+1. 确保 Unity 编辑器正在运行且已安装该包
+2. 检查 Unity 控制台中的错误信息
+3. 确认 Node.js 服务器正在运行
+4. 确认 MCP 客户端配置路径为绝对路径
 
-### Node.js Server Won't Start
+### Node.js 服务器无法启动
 
-1. Ensure you have Node.js 18+ installed: `node --version`
-2. Run `npm install` in the mcp-server directory
-3. Check for any error messages in the console
+1. 确认已安装 Node.js 18+：`node --version`
+2. 在 mcp-server 目录运行 `npm install`
+3. 检查控制台中的错误信息
 
-## Contributing
+## 贡献
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
+开发指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。

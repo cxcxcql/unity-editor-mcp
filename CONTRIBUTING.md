@@ -1,60 +1,60 @@
-# Contributing to Unity Editor MCP
+# 为 Unity Editor MCP 做贡献
 
-Thank you for your interest in contributing to Unity Editor MCP! This document provides guidelines and instructions for contributing to the project.
+感谢你对 Unity Editor MCP 的关注！本文档提供了为该项目做贡献的指南与说明。
 
-## Getting Started
+## 开始之前
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/unity-editor-mcp.git`
-3. Create a new branch: `git checkout -b feature/your-feature-name`
+1. Fork 本仓库
+2. 克隆你的 fork：`git clone https://github.com/YOUR_USERNAME/unity-editor-mcp.git`
+3. 创建新分支：`git checkout -b feature/your-feature-name`
 
-## Development Setup
+## 开发环境搭建
 
-### Prerequisites
+### 前置要求
 
-- Unity 2020.3 LTS or newer
-- Node.js 18.0.0 or newer
+- Unity 2020.3 LTS 或更高
+- Node.js 18.0.0 或更高
 - Git
 
-### Setup Instructions
+### 搭建步骤
 
-1. Install dependencies in the mcp-server directory:
+1. 在 mcp-server 目录安装依赖：
    ```bash
    cd mcp-server
    npm install
    ```
 
-2. Install the Unity package in your Unity project (see README.md)
+2. 在你的 Unity 项目中安装 Unity 包（见 README.md）
 
-3. Run tests:
+3. 运行测试：
    ```bash
    npm test
    ```
 
-## Code Guidelines
+## 代码规范
 
 ### TypeScript/JavaScript
 
-- Use ES6+ features
-- Follow the existing code style
-- Add JSDoc comments for public functions
-- Keep functions focused and single-purpose
+- 使用 ES6+ 特性
+- 遵循现有代码风格
+- 为公共函数添加 JSDoc 注释
+- 保持函数聚焦、职责单一
 
 ### Unity C#
 
-- Follow Unity's coding conventions
-- Use meaningful variable and method names
-- Add XML documentation for public methods
-- Handle exceptions appropriately
+- 遵循 Unity 编码约定
+- 使用有意义的变量和方法名
+- 为公共方法添加 XML 文档注释
+- 妥善处理异常
 
-### Commit Messages
+### 提交信息
 
-- Use clear, descriptive commit messages
-- Start with a verb in present tense (e.g., "Add", "Fix", "Update")
-- Keep the first line under 50 characters
-- Add detailed description if needed
+- 使用清晰、描述性的提交信息
+- 以现在时动词开头（如 "Add"、"Fix"、"Update"）
+- 首行保持在 50 字符以内
+- 如有需要可添加详细描述
 
-Example:
+示例：
 ```
 Add GameObject search by component type
 
@@ -63,35 +63,35 @@ Add GameObject search by component type
 - Include inactive object filtering
 ```
 
-## Testing
+## 测试
 
-- Write tests for new features
-- Ensure all tests pass before submitting PR
-- Test both Node.js and Unity components
-- Include integration tests when appropriate
+- 为新特性编写测试
+- 提交 PR 前确保所有测试通过
+- 同时测试 Node.js 和 Unity 组件
+- 适当时包含集成测试
 
-## Pull Request Process
+## Pull Request 流程
 
-1. Update documentation if needed
-2. Ensure all tests pass
-3. Update README.md if you've added new tools
-4. Submit PR with clear description
-5. Address review feedback promptly
+1. 必要时更新文档
+2. 确保所有测试通过
+3. 如果新增了工具，更新 README.md
+4. 提交带清晰描述的 PR
+5. 及时响应评审反馈
 
-## Reporting Issues
+## 报告问题
 
-- Use GitHub Issues for bug reports and feature requests
-- Include Unity version and OS information
-- Provide steps to reproduce for bugs
-- Include relevant error messages and logs
+- 使用 GitHub Issues 报告 bug 和功能请求
+- 包含 Unity 版本和操作系统信息
+- 为 bug 提供复现步骤
+- 包含相关错误信息和日志
 
-## Code of Conduct
+## 行为准则
 
-- Be respectful and inclusive
-- Welcome newcomers and help them get started
-- Focus on constructive feedback
-- Collaborate openly and transparently
+- 尊重并包容他人
+- 欢迎新手并帮助他们入门
+- 注重建设性反馈
+- 开放透明地协作
 
-## Questions?
+## 有问题？
 
-Feel free to open an issue for any questions about contributing!
+如有任何关于贡献的问题，欢迎开启 issue 提问！
