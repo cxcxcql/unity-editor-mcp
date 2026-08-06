@@ -104,7 +104,8 @@ namespace UnityEditorMCP.Core
                 { "get_test_results", command => TestRunnerHandler.GetTestResults(command.Parameters) },
                 { "cancel_tests", command => TestRunnerHandler.CancelTests(command.Parameters) },
                 // === Ares MCP 高层工具 ===
-                { "ares.context.snapshot", command => AresMcpSnapshot.Execute(command.Parameters) }
+                { "ares.context.snapshot", command => AresMcpSnapshot.Execute(command.Parameters) },
+                { "ares.scene.dry_run", command => AresMcpDryRun.Execute(command.Parameters) }
             };
         
         private static McpStatus _status = McpStatus.NotConfigured;
