@@ -6,7 +6,7 @@
 
 > ⚠️ **本项目处于 Beta 阶段，正在快速开发中。** 功能和 API 可能随时变化，请自行评估风险后使用。
 
-> 🔧 **本 fork 面向 Unity 2020.3 LTS** — 改编自 [ozankasikci/unity-editor-mcp](https://github.com/ozankasikci/unity-editor-mcp)，适配 Unity 2020.3，并附带 Claude Code/Codex MCP stdio 适配器（`claude-code/unity-mcp-adapter.mjs`）与批量工具（`batch_create_gameobjects`、`batch_instantiate_prefab`）。
+> 🔧 **本 fork 面向 Unity 2020.3 LTS** — 改编自 [ozankasikci/unity-editor-mcp](https://github.com/ozankasikci/unity-editor-mcp)，适配 Unity 2020.3，并附带 Claude Code/Codex MCP stdio 适配器（`claude-code/unity-mcp-adapter.mjs`）。
 
 Unity Editor MCP（Model Context Protocol）让 Claude、Cursor 等 AI 助手能够直接与 Unity 编辑器交互，实现 AI 辅助游戏开发与自动化。
 
