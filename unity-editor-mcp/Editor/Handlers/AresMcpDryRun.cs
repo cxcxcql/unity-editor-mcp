@@ -168,9 +168,9 @@ namespace UnityEditorMCP.Handlers
                 prefab_path = prefabPath,
                 prefab_name = prefab.name,
                 target_name = name ?? prefab.name,
-                position = ParseVector3(pos),
-                rotation = ParseQuaternion(rot),
-                scale = scale != null ? ParseVector3(scale) : Vector3.one,
+                position = V3Obj(ParseVector3(pos)),
+                rotation = V3Obj(ParseQuaternion(rot).eulerAngles),
+                scale = V3Obj(scale != null ? ParseVector3(scale) : Vector3.one),
                 name_conflict = nameConflict,
                 warnings = new List<object>()
             };
@@ -304,6 +304,11 @@ namespace UnityEditorMCP.Handlers
         {
             if (arr == null || arr.Count < 3) return Vector3.zero;
             return new Vector3((float)arr[0], (float)arr[1], (float)arr[2]);
+        }
+
+        private static object V3Obj(Vector3 v)
+        {
+            return new { x = v.x, y = v.y, z = v.z };
         }
 
         private static Quaternion ParseQuaternion(JArray arr)
