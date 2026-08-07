@@ -5,6 +5,7 @@ using System.Linq;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using Newtonsoft.Json.Linq;
 
 namespace UnityEditorMCP.Handlers
