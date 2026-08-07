@@ -35,9 +35,14 @@ namespace UnityEditorMCP.Handlers
             var componentCounts = new Dictionary<string, int>();
             foreach (var comp in prefab.GetComponentsInChildren<Component>(true))
             {
-                if (comp == null) { componentCounts["<missing>"] = componentCounts.GetValueOrDefault("<missing>") + 1; continue; }
+                if (comp == null)
+                {
+                    string key = "<missing>";
+                    componentCounts[key] = componentCounts.ContainsKey(key) ? componentCounts[key] + 1 : 1;
+                    continue;
+                }
                 string name = comp.GetType().Name;
-                componentCounts[name] = componentCounts.GetValueOrDefault(name) + 1;
+                componentCounts[name] = componentCounts.ContainsKey(name) ? componentCounts[name] + 1 : 1;
             }
 
             // 子节点层级摘要（深度 2）
