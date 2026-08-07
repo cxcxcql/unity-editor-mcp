@@ -347,11 +347,11 @@ namespace UnityEditorMCP.Handlers
             Transform t = go.transform;
             while (t != null)
             {
-                if (t.name == GENERATED_ROOT && t.parent == null)
+                if (t.name == GENERATED_ROOT && (t.parent == null || t.parent.name == GENERATED_ROOT))
                     return true;
                 t = t.parent;
             }
-            return false;
+            return go.name == GENERATED_ROOT && go.transform.parent == null;
         }
 
         private static string GetSceneHash(string scenePath)
