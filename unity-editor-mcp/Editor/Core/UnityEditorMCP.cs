@@ -106,7 +106,12 @@ namespace UnityEditorMCP.Core
                 // === Ares MCP 高层工具 ===
                 { "ares.context.snapshot", command => AresMcpSnapshot.Execute(command.Parameters) },
                 { "ares.scene.dry_run", command => AresMcpDryRun.Execute(command.Parameters) },
-                { "ares.scene.apply_transaction", command => AresMcpTransaction.Execute(command.Parameters) }
+                { "ares.scene.apply_transaction", command => AresMcpTransaction.Execute(command.Parameters) },
+                { "ares.scene.validate", command => AresMcpValidate.Execute(command.Parameters) },
+                { "ares.scene.capture_review", command => AresMcpCaptureReview.Execute(command.Parameters) },
+                { "ares.scene.create_draft", command => AresMcpCreateDraft.Execute(command.Parameters) },
+                { "ares.assets.search", command => AresMcpAssetSearch.Execute(command.Parameters) },
+                { "ares.assets.inspect_prefab", command => AresMcpInspectPrefab.Execute(command.Parameters) }
             };
         
         private static McpStatus _status = McpStatus.NotConfigured;
