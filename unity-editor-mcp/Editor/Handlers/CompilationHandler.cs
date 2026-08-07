@@ -382,14 +382,11 @@ namespace UnityEditorMCP.Handlers
         [InitializeOnLoadMethod]
         private static void Initialize()
         {
-            // Auto-start monitoring when Unity loads
-            EditorApplication.delayCall += () =>
-            {
-                if (!isMonitoring)
-                {
-                    StartCompilationMonitoring(new JObject());
-                }
-            };
+            // NOTE (Ares fork): auto-start removed. Auto-starting monitoring on every
+            // domain reload caused an infinite AssetDatabase refresh loop when the
+            // package is referenced via a local file: path (Speciesboom project).
+            // Monitoring is now opt-in via start_compilation_monitoring command.
+            // isMonitoring stays false until explicitly requested.
         }
     }
 }
