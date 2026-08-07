@@ -66,7 +66,7 @@ namespace UnityEditorMCP.Handlers
                 {
                     if (name.Equals(query, StringComparison.OrdinalIgnoreCase)) score = 100;
                     else if (name.StartsWith(query, StringComparison.OrdinalIgnoreCase)) score = 80;
-                    else if (name.Contains(query, StringComparison.OrdinalIgnoreCase)) score = 60;
+                    else if (name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) score = 60;
                     else score = 40;
                 }
 
