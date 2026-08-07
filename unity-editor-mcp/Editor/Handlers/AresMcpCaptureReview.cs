@@ -153,18 +153,24 @@ namespace UnityEditorMCP.Handlers
 
         private static bool RenderCamera(Camera cam, string fullPath, int width, int height)
         {
-            // 保存原状态
-            var origPos = cam.transform.position;
-            var origRot = cam.transform.rotation;
-            int origTarget = cam.targetTexture != null ? cam.targetTexture.GetInstanceID() : 0;
-
             try
             {
                 var rt = new RenderTexture(width, height, 24);
                 var prev = cam.targetTexture;
                 cam.targetTexture = rt;
-                cam.Render();
-                cam.targetTexture = prev;
+
+                // 临时激活相机
+                bool wasEnabled = cam.enabled;
+                cam.enabled = true;
+                try
+                {
+                    cam.Render();
+                }
+                finally
+                {
+                    cam.enabled = wasEnabled;
+                    cam.targetTexture = prev;
+                }
 
                 RenderTexture.active = rt;
                 var tex = new Texture2D(width, height, TextureFormat.RGB24, false);
@@ -180,14 +186,10 @@ namespace UnityEditorMCP.Handlers
                 File.WriteAllBytes(fullPath, png);
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.LogWarning($"[AresMcpCaptureReview] Camera render failed: {ex.Message}");
                 return false;
-            }
-            finally
-            {
-                cam.transform.position = origPos;
-                cam.transform.rotation = origRot;
             }
         }
 

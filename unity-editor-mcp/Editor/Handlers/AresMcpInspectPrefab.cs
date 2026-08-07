@@ -101,9 +101,9 @@ namespace UnityEditorMCP.Handlers
                 name = prefab.name,
                 path,
                 guid = guid ?? AssetDatabase.AssetPathToGUID(path),
-                bounds = hasBounds ? new { center = bounds.center, size = bounds.size, extents = bounds.extents } : null,
-                pivot = prefab.transform.position,
-                rotation = prefab.transform.rotation.eulerAngles,
+                bounds = hasBounds ? new { center = V3(bounds.center), size = V3(bounds.size), extents = V3(bounds.extents) } : null,
+                pivot = V3(prefab.transform.position),
+                rotation = V3(prefab.transform.rotation.eulerAngles),
                 layer = prefab.layer,
                 tag = prefab.tag,
                 is_ui = prefab.GetComponent<RectTransform>() != null,
@@ -119,22 +119,25 @@ namespace UnityEditorMCP.Handlers
 
         private static object BuildNode(Transform t, int maxDepth)
         {
-            var node = new
-            {
-                name = t.name,
-                local_position = t.localPosition,
-                local_scale = t.localScale,
-                child_count = t.childCount,
-                children = new List<object>()
-            };
             if (maxDepth > 0)
             {
                 var children = new List<object>();
                 foreach (Transform c in t)
                     children.Add(BuildNode(c, maxDepth - 1));
-                return new { name = t.name, local_position = t.localPosition, local_scale = t.localScale, children };
+                return new { name = t.name, local_position = V3(t.localPosition), local_scale = V3(t.localScale), children };
             }
-            return node;
+            return new
+            {
+                name = t.name,
+                local_position = V3(t.localPosition),
+                local_scale = V3(t.localScale),
+                child_count = t.childCount
+            };
+        }
+
+        private static object V3(Vector3 v)
+        {
+            return new { x = v.x, y = v.y, z = v.z };
         }
 
         private static Bounds GetPrefabBounds(GameObject prefab)
