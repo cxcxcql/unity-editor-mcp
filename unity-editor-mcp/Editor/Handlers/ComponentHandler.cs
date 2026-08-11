@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -429,6 +430,10 @@ namespace UnityEditorMCP.Handlers
                     {
                         return SetUnityEvent(component, field.GetValue(component) as UnityEventBase, value);
                     }
+                    if (SetStructuredField(component, component, field, value))
+                    {
+                        return true;
+                    }
                     field.SetValue(component, ConvertValue(value, field.FieldType));
                     return true;
                 }
@@ -713,6 +718,122 @@ namespace UnityEditorMCP.Handlers
             if (string.IsNullOrEmpty(s) || s.Length != 32) return false;
             foreach (char c in s) if (!Uri.IsHexDigit(c)) return false;
             return true;
+        }
+
+        /// <summary>
+        /// Applies a JSON value to a field, supporting List&lt;&gt;/array fields and nested
+        /// [Serializable] objects (e.g. CFSMPart.m_listState). Scalar / enum / Vector /
+        /// UnityEngine.Object leaves reuse <see cref="ConvertValue"/>; UnityEvent leaves reuse
+        /// <see cref="SetUnityEvent"/>. Returns false when the value shape doesn't match the field,
+        /// so the caller can fall back to <see cref="ConvertValue"/>.
+        /// </summary>
+        private static bool SetStructuredField(Component component, object instance, FieldInfo field, JToken value)
+        {
+            Type fieldType = field.FieldType;
+            try
+            {
+                // UnityEvent -> wire persistent calls (or clear existing ones).
+                if (typeof(UnityEventBase).IsAssignableFrom(fieldType))
+                {
+                    return SetUnityEvent(component, field.GetValue(instance) as UnityEventBase, value);
+                }
+
+                // Collection (List<> / array) -> rebuild the whole collection from a JSON array.
+                if (value.Type == JTokenType.Array && IsCollectionType(fieldType))
+                {
+                    Type elementType = fieldType.IsArray ? fieldType.GetElementType() : fieldType.GetGenericArguments()[0];
+                    Type listType = fieldType.IsArray ? typeof(List<>).MakeGenericType(elementType) : fieldType;
+                    var list = (IList)Activator.CreateInstance(listType);
+                    foreach (JToken item in (JArray)value)
+                    {
+                        list.Add(CreateElementValue(component, elementType, item));
+                    }
+
+                    object finalValue = list;
+                    if (fieldType.IsArray)
+                    {
+                        var array = Array.CreateInstance(elementType, list.Count);
+                        for (int i = 0; i < list.Count; i++) array.SetValue(list[i], i);
+                        finalValue = array;
+                    }
+                    field.SetValue(instance, finalValue);
+                    return true;
+                }
+
+                // Nested [Serializable] object -> map each serializable member from the JSON object.
+                if (value.Type == JTokenType.Object && !typeof(UnityEngine.Object).IsAssignableFrom(fieldType))
+                {
+                    object nested = field.GetValue(instance) ?? Activator.CreateInstance(fieldType);
+                    ApplyJsonToObject(component, nested, (JObject)value);
+                    field.SetValue(instance, nested);
+                    return true;
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ComponentHandler] Failed to set structured field {field.Name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Maps each public / [SerializeField] member of an object from a JSON object. Members not
+        /// present in the JSON are left untouched; UnityEvent members keep their default instances.
+        /// </summary>
+        private static void ApplyJsonToObject(Component component, object instance, JObject json)
+        {
+            Type type = instance.GetType();
+            foreach (var memberField in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (!memberField.IsPublic && !memberField.IsDefined(typeof(SerializeField), true)) continue;
+
+                JToken memberValue;
+                if (!json.TryGetValue(memberField.Name, out memberValue)) continue;
+                if (memberValue.Type == JTokenType.Null) { memberField.SetValue(instance, null); continue; }
+
+                if (!SetStructuredField(component, instance, memberField, memberValue))
+                {
+                    memberField.SetValue(instance, ConvertValue(memberValue, memberField.FieldType));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Builds a single collection element from JSON, recursing into nested serializable objects.
+        /// </summary>
+        private static object CreateElementValue(Component component, Type elementType, JToken item)
+        {
+            if (item.Type == JTokenType.Null) return null;
+            if (IsLeafValueType(elementType)) return ConvertValue(item, elementType);
+            if (item.Type == JTokenType.Object)
+            {
+                object element = Activator.CreateInstance(elementType);
+                ApplyJsonToObject(component, element, (JObject)item);
+                return element;
+            }
+            return ConvertValue(item, elementType);
+        }
+
+        /// <summary>
+        /// True for List&lt;&gt; / array / other IList types (string excluded).
+        /// </summary>
+        private static bool IsCollectionType(Type type)
+        {
+            return type != typeof(string) && typeof(IList).IsAssignableFrom(type);
+        }
+
+        /// <summary>
+        /// True for scalar / enum / string / Unity math / UnityEngine.Object types that
+        /// <see cref="ConvertValue"/> handles directly.
+        /// </summary>
+        private static bool IsLeafValueType(Type type)
+        {
+            return type.IsPrimitive || type.IsEnum || type == typeof(string) ||
+                   type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4) ||
+                   type == typeof(Quaternion) || type == typeof(Color) ||
+                   typeof(UnityEngine.Object).IsAssignableFrom(type);
         }
 
         /// <summary>
