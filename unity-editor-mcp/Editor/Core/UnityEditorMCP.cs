@@ -33,6 +33,33 @@ namespace UnityEditorMCP.Core
         private static int mainThreadId;
         private static volatile bool registryWritePending;
         private delegate object CommandHandlerDelegate(Command command);
+
+        // 写类命令：执行成功后自动保存场景/prefab，避免脏状态累积导致后续切换阻塞
+        private static readonly HashSet<string> WriteCommands =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "create_gameobject",
+                "modify_gameobject",
+                "delete_gameobject",
+                "add_component",
+                "remove_component",
+                "modify_component",
+                "instantiate_prefab",
+                "batch_create_gameobjects",
+                "batch_instantiate_prefab",
+                "ares.scene.apply_transaction"
+            };
+
+        // 上下文切换类命令：执行前先保存当前场景/prefab，避免 Unity 弹未保存确认框阻塞
+        private static readonly HashSet<string> ContextSwitchCommands =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "load_scene",
+                "open_prefab",
+                "exit_prefab_mode",
+                "create_scene"
+            };
+
         private static readonly Dictionary<string, CommandHandlerDelegate> CommandHandlers =
             new Dictionary<string, CommandHandlerDelegate>(StringComparer.OrdinalIgnoreCase)
             {
@@ -482,20 +509,31 @@ namespace UnityEditorMCP.Core
                 }
                 else
                 {
-                
-                if (TryExecuteRegisteredCommand(command, out object commandResult))
-                {
-                    response = Response.SuccessResult(command.Id, commandResult);
-                }
-                else
-                {
-                    response = Response.ErrorResult(
-                        command.Id,
-                        $"Unknown command type: {command.Type}",
-                        "UNKNOWN_COMMAND",
-                        new { commandType = command.Type }
-                    );
-                }
+                    // 上下文切换前先保存，避免 dirty 场景/prefab 触发 Unity 确认框而阻塞
+                    if (ContextSwitchCommands.Contains(command.Type))
+                    {
+                        SceneSaveHelper.SaveSceneIfDirty();
+                    }
+
+                    if (TryExecuteRegisteredCommand(command, out object commandResult))
+                    {
+                        response = Response.SuccessResult(command.Id, commandResult);
+
+                        // 写类命令成功后自动保存，让修改立即落盘
+                        if (WriteCommands.Contains(command.Type))
+                        {
+                            SceneSaveHelper.SaveSceneIfDirty();
+                        }
+                    }
+                    else
+                    {
+                        response = Response.ErrorResult(
+                            command.Id,
+                            $"Unknown command type: {command.Type}",
+                            "UNKNOWN_COMMAND",
+                            new { commandType = command.Type }
+                        );
+                    }
                 }
                 
                 // Send response

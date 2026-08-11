@@ -816,7 +816,8 @@ namespace UnityEditorMCP.Handlers
                 bool changesSaved = false;
 
                 // Save changes if requested
-                if (saveChanges && currentStage.scene.isDirty)
+                // 不依赖 isDirty：prefab stage 内 SetDirty 未必标记 stage.scene dirty，但内容确实被改了
+                if (saveChanges)
                 {
                     try
                     {
@@ -866,29 +867,17 @@ namespace UnityEditorMCP.Handlers
                 {
                     // Save current prefab in prefab mode
                     string prefabPath = currentStage.assetPath;
-                    
-                    if (currentStage.scene.isDirty)
+
+                    // 不依赖 isDirty：prefab stage 内 SetDirty 未必标记 stage.scene dirty，但内容确实被改了
+                    PrefabUtility.SaveAsPrefabAsset(currentStage.prefabContentsRoot, prefabPath);
+
+                    return new
                     {
-                        PrefabUtility.SaveAsPrefabAsset(currentStage.prefabContentsRoot, prefabPath);
-                        
-                        return new
-                        {
-                            success = true,
-                            savedInPrefabMode = true,
-                            prefabPath = prefabPath,
-                            message = "Prefab changes saved successfully"
-                        };
-                    }
-                    else
-                    {
-                        return new
-                        {
-                            success = true,
-                            savedInPrefabMode = true,
-                            prefabPath = prefabPath,
-                            message = "No changes to save"
-                        };
-                    }
+                        success = true,
+                        savedInPrefabMode = true,
+                        prefabPath = prefabPath,
+                        message = "Prefab changes saved successfully"
+                    };
                 }
                 else if (!string.IsNullOrEmpty(gameObjectPath))
                 {
