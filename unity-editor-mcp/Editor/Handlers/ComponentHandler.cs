@@ -874,44 +874,88 @@ namespace UnityEditorMCP.Handlers
                 return;
             }
 
-            Type t = target.GetType();
+            // When the target resolves to a GameObject, the callable method may live on one of its
+            // components (e.g. CFSMFunction_Base.Trigger / CAIFSM.Active), so search the GameObject
+            // itself plus every component attached to it.
+            var candidates = new List<UnityEngine.Object>();
+            if (target is GameObject go)
+            {
+                candidates.Add(go);
+                candidates.AddRange(go.GetComponents<Component>());
+            }
+            else
+            {
+                candidates.Add(target);
+            }
+
             try
             {
                 if (arg == null || arg.Type == JTokenType.Null)
                 {
-                    var mi = t.GetMethod(method, Type.EmptyTypes);
-                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}() not found"); return; }
-                    UnityEventTools.AddVoidPersistentListener(voidEvent, (UnityAction)Delegate.CreateDelegate(typeof(UnityAction), target, mi));
+                    if (TryAddPersistentCall(candidates, voidEvent, method, Type.EmptyTypes, (obj, mi) =>
+                        UnityEventTools.AddVoidPersistentListener(voidEvent,
+                            (UnityAction)Delegate.CreateDelegate(typeof(UnityAction), obj, mi))))
+                        return;
+                    // Fallback: methods with an optional int parameter (e.g. Trigger(int n = 0))
+                    // can be wired without an explicit argument, using the parameter default.
+                    if (TryAddPersistentCall(candidates, voidEvent, method, new[] { typeof(int) }, (obj, mi) =>
+                    {
+                        int defaultValue = 0;
+                        try
+                        {
+                            var p = mi.GetParameters()[0];
+                            if (p.HasDefaultValue) defaultValue = Convert.ToInt32(p.DefaultValue);
+                        }
+                        catch { }
+                        UnityEventTools.AddIntPersistentListener(voidEvent,
+                            (UnityAction<int>)Delegate.CreateDelegate(typeof(UnityAction<int>), obj, mi), defaultValue);
+                    }))
+                        return;
+                    Debug.LogWarning($"[ComponentHandler] {target.GetType().Name}.{method}() not found on GameObject or its components.");
+                    return;
                 }
-                else if (arg.Type == JTokenType.Boolean)
+                if (arg.Type == JTokenType.Boolean)
                 {
-                    var mi = t.GetMethod(method, new[] { typeof(bool) });
-                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(bool) not found"); return; }
-                    UnityEventTools.AddBoolPersistentListener(voidEvent, (UnityAction<bool>)Delegate.CreateDelegate(typeof(UnityAction<bool>), target, mi), arg.ToObject<bool>());
+                    TryAddPersistentCall(candidates, voidEvent, method, new[] { typeof(bool) }, (obj, mi) =>
+                        UnityEventTools.AddBoolPersistentListener(voidEvent,
+                            (UnityAction<bool>)Delegate.CreateDelegate(typeof(UnityAction<bool>), obj, mi), arg.ToObject<bool>()));
                 }
                 else if (arg.Type == JTokenType.Integer)
                 {
-                    var mi = t.GetMethod(method, new[] { typeof(int) });
-                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(int) not found"); return; }
-                    UnityEventTools.AddIntPersistentListener(voidEvent, (UnityAction<int>)Delegate.CreateDelegate(typeof(UnityAction<int>), target, mi), arg.ToObject<int>());
+                    TryAddPersistentCall(candidates, voidEvent, method, new[] { typeof(int) }, (obj, mi) =>
+                        UnityEventTools.AddIntPersistentListener(voidEvent,
+                            (UnityAction<int>)Delegate.CreateDelegate(typeof(UnityAction<int>), obj, mi), arg.ToObject<int>()));
                 }
                 else if (arg.Type == JTokenType.Float)
                 {
-                    var mi = t.GetMethod(method, new[] { typeof(float) });
-                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(float) not found"); return; }
-                    UnityEventTools.AddFloatPersistentListener(voidEvent, (UnityAction<float>)Delegate.CreateDelegate(typeof(UnityAction<float>), target, mi), arg.ToObject<float>());
+                    TryAddPersistentCall(candidates, voidEvent, method, new[] { typeof(float) }, (obj, mi) =>
+                        UnityEventTools.AddFloatPersistentListener(voidEvent,
+                            (UnityAction<float>)Delegate.CreateDelegate(typeof(UnityAction<float>), obj, mi), arg.ToObject<float>()));
                 }
                 else
                 {
-                    var mi = t.GetMethod(method, new[] { typeof(string) });
-                    if (mi == null) { Debug.LogWarning($"[ComponentHandler] {t.Name}.{method}(string) not found"); return; }
-                    UnityEventTools.AddStringPersistentListener(voidEvent, (UnityAction<string>)Delegate.CreateDelegate(typeof(UnityAction<string>), target, mi), arg.ToObject<string>());
+                    TryAddPersistentCall(candidates, voidEvent, method, new[] { typeof(string) }, (obj, mi) =>
+                        UnityEventTools.AddStringPersistentListener(voidEvent,
+                            (UnityAction<string>)Delegate.CreateDelegate(typeof(UnityAction<string>), obj, mi), arg.ToObject<string>()));
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[ComponentHandler] Failed to wire {t.Name}.{method}: {ex.Message}");
+                Debug.LogWarning($"[ComponentHandler] Failed to wire {target.GetType().Name}.{method}: {ex.Message}");
             }
+        }
+
+        private static bool TryAddPersistentCall(List<UnityEngine.Object> candidates, UnityEvent voidEvent, string method,
+            Type[] argTypes, Action<UnityEngine.Object, MethodInfo> add)
+        {
+            foreach (var obj in candidates)
+            {
+                var mi = obj.GetType().GetMethod(method, argTypes);
+                if (mi == null) continue;
+                add(obj, mi);
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
