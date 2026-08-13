@@ -476,18 +476,22 @@ namespace UnityEditorMCP.Handlers
                 bool includeInactive = parameters["includeInactive"]?.ToObject<bool>() ?? true;
                 int maxDepth = parameters["maxDepth"]?.ToObject<int>() ?? -1;
                 bool includeComponents = parameters["includeComponents"]?.ToObject<bool>() ?? false;
-                
+                // 默认过滤美术节点（名字为 root 的节点及其子树），避免场景层级过于庞大
+                bool skipArtNodes = parameters["skipArtNodes"]?.ToObject<bool>() ?? true;
+
                 // Get root GameObjects
                 GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
-                
+
                 // Build hierarchy
                 List<object> hierarchy = new List<object>();
                 foreach (var root in rootObjects)
                 {
                     if (!includeInactive && !root.activeInHierarchy)
                         continue;
-                        
-                    hierarchy.Add(BuildHierarchyNode(root, 0, maxDepth, includeInactive, includeComponents));
+
+                    var node = BuildHierarchyNode(root, 0, maxDepth, includeInactive, includeComponents, skipArtNodes);
+                    if (node != null)
+                        hierarchy.Add(node);
                 }
                 
                 return new
@@ -506,8 +510,12 @@ namespace UnityEditorMCP.Handlers
         /// <summary>
         /// Builds a hierarchy node for a GameObject
         /// </summary>
-        private static object BuildHierarchyNode(GameObject obj, int currentDepth, int maxDepth, bool includeInactive, bool includeComponents)
+        private static object BuildHierarchyNode(GameObject obj, int currentDepth, int maxDepth, bool includeInactive, bool includeComponents, bool skipArtNodes)
         {
+            // 过滤美术节点：名字为 root 的节点其下全是美术子节点，对整个解决方案作用不大
+            if (skipArtNodes && obj.name == "root")
+                return null;
+
             var node = new Dictionary<string, object>
             {
                 ["name"] = obj.name,
@@ -522,7 +530,7 @@ namespace UnityEditorMCP.Handlers
                     scale = new { x = obj.transform.localScale.x, y = obj.transform.localScale.y, z = obj.transform.localScale.z }
                 }
             };
-            
+
             // Add components if requested
             if (includeComponents)
             {
@@ -537,7 +545,7 @@ namespace UnityEditorMCP.Handlers
                 }
                 node["components"] = componentList;
             }
-            
+
             // Add children if within depth limit
             if (maxDepth < 0 || currentDepth < maxDepth)
             {
@@ -546,16 +554,18 @@ namespace UnityEditorMCP.Handlers
                 {
                     if (!includeInactive && !child.gameObject.activeInHierarchy)
                         continue;
-                        
-                    children.Add(BuildHierarchyNode(child.gameObject, currentDepth + 1, maxDepth, includeInactive, includeComponents));
+
+                    var childNode = BuildHierarchyNode(child.gameObject, currentDepth + 1, maxDepth, includeInactive, includeComponents, skipArtNodes);
+                    if (childNode != null)
+                        children.Add(childNode);
                 }
-                
+
                 if (children.Count > 0)
                 {
                     node["children"] = children;
                 }
             }
-            
+
             return node;
         }
     }

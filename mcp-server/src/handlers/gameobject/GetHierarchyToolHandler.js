@@ -24,6 +24,10 @@ export class GetHierarchyToolHandler extends BaseToolHandler {
           includeComponents: {
             type: 'boolean',
             description: 'Include component information (default: false)'
+          },
+          skipArtNodes: {
+            type: 'boolean',
+            description: 'Skip subtrees rooted at GameObjects named exactly "root" (art nodes). Default: true'
           }
         },
         required: []

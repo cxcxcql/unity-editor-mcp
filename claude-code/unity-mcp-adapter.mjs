@@ -257,11 +257,13 @@ const TOOLS = [
   tool(
     'get_hierarchy',
     'Get the active scene hierarchy. ' +
-      'Params: includeInactive (bool, default true), maxDepth (int, default -1 = unlimited), includeComponents (bool, default false).',
+      'Params: includeInactive (bool, default true), maxDepth (int, default -1 = unlimited), includeComponents (bool, default false), ' +
+      'skipArtNodes (bool, default true — skip subtrees rooted at GameObjects named exactly "root").',
     {
       includeInactive: { type: 'boolean' },
       maxDepth: { type: 'integer' },
       includeComponents: { type: 'boolean' },
+      skipArtNodes: { type: 'boolean' },
     }
   ),
 

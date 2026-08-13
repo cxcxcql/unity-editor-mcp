@@ -129,7 +129,7 @@ Unity Editor MCP 提供 **64 个工具**，覆盖 **11 个类别**，实现完�
 - **`find_gameobject`** - 按名称、tag、layer 查找 GameObject，支持模式匹配
 - **`modify_gameobject`** - 修改 GameObject 属性（transform、名称、激活状态、父节点等）
 - **`delete_gameobject`** - 删除单个或多个 GameObject，可选处理子对象
-- **`get_hierarchy`** - 获取完整场景层级，支持组件信息与深度控制
+- **`get_hierarchy`** - 获取完整场景层级，支持组件信息与深度控制，默认过滤美术节点（名为 root 的子树，可用 `skipArtNodes` 关闭）
 
 ### 组件系统（5 个）
 - **`add_component`** - 为 GameObject 添加组件并设置初始属性
