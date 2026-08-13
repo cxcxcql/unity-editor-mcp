@@ -117,7 +117,7 @@ unity-editor-mcp doctor --json
 
 ## 可用工具
 
-Unity Editor MCP 提供 **63 个工具**，覆盖 **11 个类别**，实现完整的 Unity 编辑器自动化：
+Unity Editor MCP 提供 **64 个工具**，覆盖 **11 个类别**，实现完整的 Unity 编辑器自动化：
 
 ### 系统与核心工具（3 个）
 - **`ping`** - 测试与 Unity 编辑器的连接并验证服务器状态
@@ -152,7 +152,8 @@ Unity Editor MCP 提供 **63 个工具**，覆盖 **11 个类别**，实现完�
 - **`find_by_component`** - 按组件类型查找 GameObject，支持范围过滤（scene/prefabs/all）
 - **`get_object_references`** - 分析对象间引用，包括层级和资源连接
 
-### 资源管理（11 个）
+### 资源管理（12 个）
+- **`ares_assets_search`** - 按名称关键词、类型、标签或目录搜索资源，返回 GUID、路径、匹配分数
 - **`create_prefab`** - 从 GameObject 或空模板创建 prefab，支持覆盖选项
 - **`modify_prefab`** - 修改现有 prefab，支持属性变更和实例更新
 - **`instantiate_prefab`** - 在场景中实例化 prefab，支持变换与父子设置

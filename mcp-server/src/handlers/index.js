@@ -57,6 +57,7 @@ export { SavePrefabToolHandler } from './asset/SavePrefabToolHandler.js';
 export { AssetImportSettingsToolHandler } from './asset/AssetImportSettingsToolHandler.js';
 export { AssetDatabaseToolHandler } from './asset/AssetDatabaseToolHandler.js';
 export { AssetDependencyToolHandler } from './asset/AssetDependencyToolHandler.js';
+export { AssetSearchToolHandler } from './asset/AssetSearchToolHandler.js';
 
 // Scripting handlers
 export { CreateScriptToolHandler } from './scripting/CreateScriptToolHandler.js';
@@ -143,6 +144,7 @@ import { SavePrefabToolHandler } from './asset/SavePrefabToolHandler.js';
 import { AssetImportSettingsToolHandler } from './asset/AssetImportSettingsToolHandler.js';
 import { AssetDatabaseToolHandler } from './asset/AssetDatabaseToolHandler.js';
 import { AssetDependencyToolHandler } from './asset/AssetDependencyToolHandler.js';
+import { AssetSearchToolHandler } from './asset/AssetSearchToolHandler.js';
 import { CreateScriptToolHandler } from './scripting/CreateScriptToolHandler.js';
 import { ReadScriptToolHandler } from './scripting/ReadScriptToolHandler.js';
 import { UpdateScriptToolHandler } from './scripting/UpdateScriptToolHandler.js';
@@ -227,7 +229,8 @@ const HANDLER_CLASSES = [
   AssetImportSettingsToolHandler,
   AssetDatabaseToolHandler,
   AssetDependencyToolHandler,
-  
+  AssetSearchToolHandler,
+
   // Scripting handlers
   CreateScriptToolHandler,
   ReadScriptToolHandler,

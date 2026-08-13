@@ -638,6 +638,20 @@ const TOOLS = [
   ),
 
   tool(
+    'ares_assets_search',
+    'Search Unity assets by name keyword, type, tag, or folder. ' +
+      'Params: query (name keyword), type (prefab|script|material|texture|scene|audio|animation|font|shader), tag, folder (search directory), limit (default 50). ' +
+      'Returns: guid, name, path, asset_type, score (100 exact / 80 prefix / 60 contains / 40 loose), is_prefab. Read-only.',
+    {
+      query: { type: 'string' },
+      type: { type: 'string' },
+      tag: { type: 'string' },
+      folder: { type: 'string' },
+      limit: { type: 'integer' },
+    }
+  ),
+
+  tool(
     'analyze_asset_dependencies',
     'Analyze asset dependencies. Params: action (get_dependencies|get_dependents|analyze_circular|find_unused|analyze_size_impact|validate_references), assetPath, recursive (bool), includeBuiltIn (bool).',
     {
@@ -664,6 +678,13 @@ const TOOLS = [
 ];
 
 const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
+
+// Tools whose client-facing name differs from the Unity plugin's command type.
+// Keep ares_assets_search underscore-form for MCP naming safety; the plugin
+// registers the dotted command ares.assets.search.
+const TOOL_COMMAND_MAP = new Map([
+  ['ares_assets_search', 'ares.assets.search'],
+]);
 
 /* ------------------------------------------------------------------ */
 /* MCP (JSON-RPC over stdio) server                                    */
@@ -755,7 +776,8 @@ async function callTool(params) {
 
   const started = Date.now();
   try {
-    const result = await sendCommand(name, args);
+    const command = TOOL_COMMAND_MAP.get(name) || name;
+    const result = await sendCommand(command, args);
     const text = JSON.stringify(result, null, 2);
     log(`ok: ${name} (${Date.now() - started}ms)`);
     return {

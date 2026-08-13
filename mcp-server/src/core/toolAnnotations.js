@@ -12,7 +12,8 @@ const READ_ONLY_TOOLS = new Set([
   'enhanced_read_logs',
   'get_editor_state',
   'get_hierarchy',
-  'get_component_types'
+  'get_component_types',
+  'ares_assets_search'
 ]);
 
 const MUTATING_PREFIXES = [
