@@ -107,7 +107,7 @@ namespace UnityEditorMCP.Handlers
                 operations = results,
                 warnings = warnings,
                 errors = errorsList,
-                _note = "DryRun is a read-only analysis. No scene changes were made. Run ares.scene.apply_transaction with the returned change_set_id to execute."
+                _note = "DryRun is a read-only analysis. No scene changes were made. Run ares.scene.apply_transaction with the same recipe (plus an approval_token) to execute."
             };
         }
 

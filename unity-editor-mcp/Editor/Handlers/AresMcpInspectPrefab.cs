@@ -21,6 +21,8 @@ namespace UnityEditorMCP.Handlers
         {
             string guid = parameters?["guid"]?.ToString();
             string path = parameters?["path"]?.ToString();
+            //缩略图默认不写（保持只读），显式传 write_thumbnail=true 才落盘
+            bool writeThumbnail = parameters?["write_thumbnail"]?.ToObject<bool>() ?? false;
 
             if (string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(guid))
                 path = AssetDatabase.GUIDToAssetPath(guid);
@@ -77,23 +79,26 @@ namespace UnityEditorMCP.Handlers
                     dependencies.Add(dep);
             }
 
-            // 缩略图：生成到临时目录
+            // 缩略图：默认跳过（写文件+Refresh 会破坏只读语义），仅 write_thumbnail=true 时生成
             string thumbnailPath = null;
-            try
+            if (writeThumbnail)
             {
-                var thumbnail = AssetPreview.GetAssetPreview(prefab);
-                if (thumbnail != null)
+                try
                 {
-                    string thumbDir = "Assets/Ares/MCP/Catalog/ThumbnailCache";
-                    EnsureFolder(thumbDir);
-                    thumbnailPath = $"{thumbDir}/{guid ?? Guid.NewGuid().ToString("N")}.png";
-                    byte[] png = thumbnail.EncodeToPNG();
-                    System.IO.File.WriteAllBytes(
-                        System.IO.Path.Combine(Application.dataPath, "..", thumbnailPath), png);
-                    AssetDatabase.Refresh();
+                    var thumbnail = AssetPreview.GetAssetPreview(prefab);
+                    if (thumbnail != null)
+                    {
+                        string thumbDir = "Assets/Ares/MCP/Catalog/ThumbnailCache";
+                        EnsureFolder(thumbDir);
+                        thumbnailPath = $"{thumbDir}/{guid ?? Guid.NewGuid().ToString("N")}.png";
+                        byte[] png = thumbnail.EncodeToPNG();
+                        System.IO.File.WriteAllBytes(
+                            System.IO.Path.Combine(Application.dataPath, "..", thumbnailPath), png);
+                        AssetDatabase.Refresh();
+                    }
                 }
+                catch { /* 缩略图失败不阻断 */ }
             }
-            catch { /* 缩略图失败不阻断 */ }
 
             return new
             {

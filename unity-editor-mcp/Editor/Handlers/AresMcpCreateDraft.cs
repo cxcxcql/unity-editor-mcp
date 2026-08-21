@@ -43,6 +43,11 @@ namespace UnityEditorMCP.Handlers
             if (!outputPath.EndsWith(".unity", StringComparison.OrdinalIgnoreCase))
                 outputPath += ".unity";
 
+            //当前场景有未保存修改时直接拒绝：后续 NewScene/OpenScene(Single) 会静默丢弃这些修改
+            var activeScene = SceneManager.GetActiveScene();
+            if (activeScene.isDirty)
+                return new { error = $"Current scene '{activeScene.name}' has unsaved changes; save or discard it before creating a draft" };
+
             try
             {
                 // 确保目录存在

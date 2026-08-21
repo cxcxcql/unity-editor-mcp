@@ -24,11 +24,11 @@ namespace UnityEditorMCP.Handlers
     /// }
     ///
     /// 安全约束：
-    /// - 只写入 Generated Root 下
+    /// - 只写入生成根节点下（默认 "Generated"，可用 root_name 参数自定义，与 dry_run 对齐）
     /// - 删除操作默认关闭（需显式 allow_delete:true）
     /// - Scene Hash 乐观锁（expected_scene_hash 不匹配则拒绝）
     /// - 单 Undo Group 包裹全部操作
-    /// - 异常自动 Undo
+    /// - 任何操作失败（异常或 error/partial 状态）都会整体 Undo 回滚
     /// </summary>
     public static class AresMcpTransaction
     {
@@ -41,11 +41,13 @@ namespace UnityEditorMCP.Handlers
             string approvedChangeSetHash = parameters?["approved_change_set_hash"]?.ToString();
             string approvalToken = parameters?["approval_token"]?.ToString();
             string idempotencyKey = parameters?["idempotency_key"]?.ToString();
+            //生成根节点名可配置（默认 Generated），与 dry_run 的 root_name 参数对齐
+            string rootName = parameters?["root_name"]?.ToString() ?? GENERATED_ROOT;
 
             switch (operation)
             {
                 case "apply":
-                    return ApplyTransaction(parameters, expectedHash, approvedChangeSetHash, approvalToken, idempotencyKey);
+                    return ApplyTransaction(parameters, expectedHash, approvedChangeSetHash, approvalToken, idempotencyKey, rootName);
                 case "rollback":
                     return RollbackTransaction();
                 default:
@@ -54,7 +56,7 @@ namespace UnityEditorMCP.Handlers
         }
 
         private static object ApplyTransaction(JObject parameters, string expectedHash,
-            string approvedChangeSetHash, string approvalToken, string idempotencyKey)
+            string approvedChangeSetHash, string approvalToken, string idempotencyKey, string rootName)
         {
             var ops = parameters?["recipe"]?["operations"] as JArray;
             if (ops == null)
@@ -86,7 +88,7 @@ namespace UnityEditorMCP.Handlers
             try
             {
                 var scene = SceneManager.GetActiveScene();
-                GameObject root = EnsureGeneratedRoot(scene);
+                GameObject root = EnsureGeneratedRoot(scene, rootName);
 
                 foreach (var opToken in ops)
                 {
@@ -96,11 +98,16 @@ namespace UnityEditorMCP.Handlers
                     string type = op["type"]?.ToString();
                     try
                     {
-                        var result = ExecuteOperation(type, op, root, scene);
+                        var result = ExecuteOperation(type, op, root, scene, rootName);
                         log.Add(result);
-                        if (((dynamic)result).status == "ok") successCount++;
-                        else if (((dynamic)result).status == "skipped") skipCount++;
-                        else failCount++;
+                        string status = (string)((dynamic)result).status;
+                        if (status == "ok" || status == "updated") successCount++;
+                        else if (status == "skipped") skipCount++;
+                        else
+                        {
+                            //操作返回 error/partial 也必须整体回滚：此前只计数不回滚，状态却报 rolled_back 名不副实
+                            throw new Exception($"{type} failed with status '{status}' (see log for detail)");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -163,16 +170,16 @@ namespace UnityEditorMCP.Handlers
             }
         }
 
-        private static object ExecuteOperation(string type, JObject op, GameObject root, Scene scene)
+        private static object ExecuteOperation(string type, JObject op, GameObject root, Scene scene, string rootName)
         {
             switch (type)
             {
                 case "instantiate_prefab":
                     return InstantiatePrefab(op, root);
                 case "modify_component":
-                    return ModifyComponent(op, scene);
+                    return ModifyComponent(op, scene, rootName);
                 case "delete_object":
-                    return DeleteObject(op, scene);
+                    return DeleteObject(op, scene, rootName);
                 case "instantiate_prefab_batch":
                     return BatchInstantiatePrefab(op, root);
                 default:
@@ -210,7 +217,7 @@ namespace UnityEditorMCP.Handlers
                     existing.localPosition = pos;
                     existing.localRotation = rot;
                     existing.localScale = scl;
-                    return new { type = "instantiate_prefab", status = "updated", object_name = existing.name, path = "/" + GENERATED_ROOT + "/" + existing.name };
+                    return new { type = "instantiate_prefab", status = "updated", object_name = existing.name, path = "/" + root.name + "/" + existing.name };
                 }
                 return new { type = "instantiate_prefab", status = "skipped", object_name = existing.name, reason = "already exists, allow_update=false" };
             }
@@ -227,12 +234,12 @@ namespace UnityEditorMCP.Handlers
                 type = "instantiate_prefab",
                 status = "ok",
                 object_name = instance.name,
-                path = "/" + GENERATED_ROOT + "/" + instance.name,
+                path = "/" + root.name + "/" + instance.name,
                 prefab_path = prefabPath
             };
         }
 
-        private static object ModifyComponent(JObject op, Scene scene)
+        private static object ModifyComponent(JObject op, Scene scene, string rootName)
         {
             string targetPath = op["target_path"]?.ToString();
             string component = op["component"]?.ToString();
@@ -246,9 +253,9 @@ namespace UnityEditorMCP.Handlers
             if (target == null)
                 return new { type = "modify_component", status = "error", error = $"Target not found: {targetPath}" };
 
-            // 边界检查：只允许在 Generated Root 下修改
-            if (!IsUnderGeneratedRoot(target))
-                return new { type = "modify_component", status = "error", error = $"Target {targetPath} is not under Generated Root (read-only zone)" };
+            // 边界检查：只允许在生成根节点下修改
+            if (!IsUnderGeneratedRoot(target, rootName))
+                return new { type = "modify_component", status = "error", error = $"Target {targetPath} is not under root '{rootName}' (read-only zone)" };
 
             var comp = target.GetComponent(component);
             if (comp == null)
@@ -276,7 +283,7 @@ namespace UnityEditorMCP.Handlers
             }
         }
 
-        private static object DeleteObject(JObject op, Scene scene)
+        private static object DeleteObject(JObject op, Scene scene, string rootName)
         {
             bool allowDelete = op["allow_delete"]?.ToObject<bool>() ?? false;
             if (!allowDelete)
@@ -290,8 +297,8 @@ namespace UnityEditorMCP.Handlers
             if (target == null)
                 return new { type = "delete_object", status = "error", error = $"Target not found: {targetPath}" };
 
-            if (!IsUnderGeneratedRoot(target))
-                return new { type = "delete_object", status = "error", error = $"Target {targetPath} is not under Generated Root" };
+            if (!IsUnderGeneratedRoot(target, rootName))
+                return new { type = "delete_object", status = "error", error = $"Target {targetPath} is not under root '{rootName}'" };
 
             Undo.DestroyObjectImmediate(target);
             return new { type = "delete_object", status = "ok", target = targetPath };
@@ -316,15 +323,15 @@ namespace UnityEditorMCP.Handlers
 
         // ========== Helpers ==========
 
-        private static GameObject EnsureGeneratedRoot(Scene scene)
+        private static GameObject EnsureGeneratedRoot(Scene scene, string rootName)
         {
             foreach (var go in scene.GetRootGameObjects())
             {
-                if (go != null && go.name == GENERATED_ROOT)
+                if (go != null && go.name == rootName)
                     return go;
             }
-            // 创建 Generated Root
-            var root = new GameObject(GENERATED_ROOT);
+            // 创建生成根节点
+            var root = new GameObject(rootName);
             Undo.RegisterCreatedObjectUndo(root, "Create Generated Root");
             SceneManager.MoveGameObjectToScene(root, scene);
             return root;
@@ -342,16 +349,16 @@ namespace UnityEditorMCP.Handlers
             return null;
         }
 
-        private static bool IsUnderGeneratedRoot(GameObject go)
+        private static bool IsUnderGeneratedRoot(GameObject go, string rootName)
         {
             Transform t = go.transform;
             while (t != null)
             {
-                if (t.name == GENERATED_ROOT && (t.parent == null || t.parent.name == GENERATED_ROOT))
+                if (t.name == rootName && (t.parent == null || t.parent.name == rootName))
                     return true;
                 t = t.parent;
             }
-            return go.name == GENERATED_ROOT && go.transform.parent == null;
+            return go.name == rootName && go.transform.parent == null;
         }
 
         private static string GetSceneHash(string scenePath)
