@@ -61,23 +61,12 @@ namespace UnityEditorMCP.Handlers
                     return new { error = $"Scene with name \"{sceneName}\" already exists at path \"{scenePath}\"" };
                 }
 
-                // Ensure directory exists
+                // Ensure directory exists BEFORE calling NewScene: NewScene discards the current
+                // scene, so we must not risk reaching SaveScene only to fail on a missing directory
                 var directory = Path.GetDirectoryName(scenePath);
-                if (!AssetDatabase.IsValidFolder(directory))
+                if (!EnsureFolderExists(directory))
                 {
-                    // Create directory structure
-                    var folders = directory.Split('/');
-                    var currentPath = folders[0]; // "Assets"
-                    
-                    for (int i = 1; i < folders.Length; i++)
-                    {
-                        var nextPath = currentPath + "/" + folders[i];
-                        if (!AssetDatabase.IsValidFolder(nextPath))
-                        {
-                            AssetDatabase.CreateFolder(currentPath, folders[i]);
-                        }
-                        currentPath = nextPath;
-                    }
+                    return new { error = $"Failed to create scene directory \"{directory}\": check that every parent segment is a valid folder under Assets" };
                 }
 
                 // Create the scene
@@ -88,7 +77,7 @@ namespace UnityEditorMCP.Handlers
                 bool saved = EditorSceneManager.SaveScene(newScene, scenePath);
                 if (!saved)
                 {
-                    return new { error = "Failed to save scene" };
+                    return new { error = $"Failed to save scene to \"{scenePath}\". Check Editor.log for the underlying error (e.g. invalid path characters)." };
                 }
 
                 // Add to build settings if requested
@@ -123,6 +112,46 @@ namespace UnityEditorMCP.Handlers
             {
                 return new { error = $"Failed to create scene: {ex.Message}" };
             }
+        }
+
+        /// <summary>
+        /// Ensures the directory chain under Assets exists (creates missing levels via AssetDatabase).
+        /// Handles backslash separators returned by Path.GetDirectoryName on Windows — a naive Split('/')
+        /// on such a path silently creates nothing.
+        /// </summary>
+        private static bool EnsureFolderExists(string directory)
+        {
+            if (string.IsNullOrEmpty(directory))
+            {
+                return false;
+            }
+
+            // Normalize separators: AssetDatabase paths must use forward slashes
+            var normalized = directory.Replace('\\', '/').TrimEnd('/');
+            if (normalized != "Assets" && !normalized.StartsWith("Assets/"))
+            {
+                return false;
+            }
+            if (AssetDatabase.IsValidFolder(normalized))
+            {
+                return true;
+            }
+
+            // Create the folder chain level by level
+            var folders = normalized.Split('/');
+            var currentPath = folders[0]; // "Assets"
+            for (int i = 1; i < folders.Length; i++)
+            {
+                var nextPath = currentPath + "/" + folders[i];
+                if (!AssetDatabase.IsValidFolder(nextPath))
+                {
+                    AssetDatabase.CreateFolder(currentPath, folders[i]);
+                }
+                currentPath = nextPath;
+            }
+
+            // Final verification catches failures CreateFolder swallows (e.g. name clash with a non-folder asset)
+            return AssetDatabase.IsValidFolder(currentPath);
         }
 
         private static string GenerateSummary(string sceneName, string path, bool isLoaded, int sceneIndex)
@@ -273,8 +302,28 @@ namespace UnityEditorMCP.Handlers
                 
                 // Get parameters
                 var scenePath = parameters["scenePath"]?.ToString();
-                var saveAs = parameters["saveAs"]?.ToObject<bool>() ?? false;
-                
+
+                // saveAs accepts two forms: bool (save a copy, requires scenePath) or
+                // string (used directly as the save-as destination path)
+                bool saveAs = false;
+                var saveAsToken = parameters["saveAs"];
+                if (saveAsToken != null)
+                {
+                    if (saveAsToken.Type == JTokenType.String)
+                    {
+                        var saveAsPath = saveAsToken.ToString();
+                        if (!string.IsNullOrEmpty(saveAsPath))
+                        {
+                            scenePath = saveAsPath;
+                            saveAs = true;
+                        }
+                    }
+                    else
+                    {
+                        saveAs = saveAsToken.ToObject<bool>();
+                    }
+                }
+
                 // Validate saveAs requires scenePath
                 if (saveAs && string.IsNullOrEmpty(scenePath))
                 {
@@ -311,21 +360,9 @@ namespace UnityEditorMCP.Handlers
                     
                     // Ensure directory exists
                     var directory = Path.GetDirectoryName(savePath);
-                    if (!AssetDatabase.IsValidFolder(directory))
+                    if (!EnsureFolderExists(directory))
                     {
-                        // Create directory structure
-                        var folders = directory.Split('/');
-                        var currentPath = folders[0]; // "Assets"
-                        
-                        for (int i = 1; i < folders.Length; i++)
-                        {
-                            var nextPath = currentPath + "/" + folders[i];
-                            if (!AssetDatabase.IsValidFolder(nextPath))
-                            {
-                                AssetDatabase.CreateFolder(currentPath, folders[i]);
-                            }
-                            currentPath = nextPath;
-                        }
+                        return new { error = $"Failed to create directory \"{directory}\": check that every parent segment is a valid folder under Assets" };
                     }
                 }
                 
@@ -347,9 +384,9 @@ namespace UnityEditorMCP.Handlers
                 
                 if (!saved)
                 {
-                    return new { error = "Failed to save scene" };
+                    return new { error = $"Failed to save scene to \"{savePath}\". Check Editor.log for the underlying error." };
                 }
-                
+
                 // Prepare result
                 var result = new
                 {

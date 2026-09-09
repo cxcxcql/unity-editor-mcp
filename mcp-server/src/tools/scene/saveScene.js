@@ -12,8 +12,8 @@ export const saveSceneToolDefinition = {
                 description: 'Path where to save the scene. If not provided, saves to current scene path. Required if saveAs is true.'
             },
             saveAs: {
-                type: 'boolean',
-                description: 'Whether to save as a new scene (creates a copy). Default: false'
+                type: ['boolean', 'string'],
+                description: 'Whether to save as a new scene (creates a copy). Default: false. A string value is accepted as a shortcut and used directly as the save destination.'
             }
         },
         required: []
@@ -38,8 +38,8 @@ export async function saveSceneHandler(unityConnection, args) {
             };
         }
 
-        // Validate saveAs requires scenePath
-        if (args.saveAs && !args.scenePath) {
+        // Validate saveAs requires scenePath (a string saveAs already carries its own destination)
+        if (args.saveAs && !args.scenePath && typeof args.saveAs !== 'string') {
             return {
                 content: [
                     {
