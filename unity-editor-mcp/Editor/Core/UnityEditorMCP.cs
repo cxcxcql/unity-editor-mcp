@@ -735,13 +735,26 @@ namespace UnityEditorMCP.Core
             };
         }
 
+        /// <summary>
+        /// Queues an AssetDatabase.Refresh() and returns immediately. A synchronous Refresh()
+        /// runs on the main editor thread and blocks it for the whole import+compile pass
+        /// (80-95s on large projects), leaving the TCP response pending for minutes and
+        /// looking like a hang. Callers poll get_compilation_state / read_logs afterwards.
+        /// </summary>
         private static object HandleRefreshAssets()
         {
-            AssetDatabase.Refresh();
+            // Run the real refresh on the next editor frame, after this command's
+            // response has already been sent back over TCP.
+            EditorApplication.delayCall += () =>
+            {
+                Debug.Log("[Unity Editor MCP] refresh_assets: AssetDatabase.Refresh() starting (may take 1-2 minutes on large projects)");
+                AssetDatabase.Refresh();
+                Debug.Log("[Unity Editor MCP] refresh_assets: AssetDatabase.Refresh() finished");
+            };
             return new
             {
-                message = "Asset refresh triggered",
-                isCompiling = EditorApplication.isCompiling,
+                message = "Asset refresh queued (runs on next editor frame). On large projects the recompile can take 1-2 minutes; poll get_compilation_state until compiling is done, then read_logs for errors.",
+                queued = true,
                 timestamp = DateTime.UtcNow.ToString("o")
             };
         }
