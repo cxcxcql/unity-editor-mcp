@@ -177,9 +177,13 @@ namespace UnityEditorMCP.Handlers
                 // Unity stores project-specific compilation artifacts in different locations
                 // depending on version. Do not parse the shared Editor.log here: it can contain
                 // stale compiler output from other open Unity projects.
+                // LastBuild.buildreport is deliberately NOT scanned: it is a serialized binary
+                // build report (often 20+ MB) full of "Assets/..." paths with no "(" characters,
+                // and the error-extraction regexes backtrack catastrophically over it on the
+                // main thread (measured: regex #3 alone took ~42s on a 23MB report, freezing
+                // the whole editor for minutes per get_compilation_state call).
                 var logPaths = new[]
                 {
-                    Path.Combine(Application.dataPath, "..", "Library", "LastBuild.buildreport"),
                     Path.Combine(Application.dataPath, "..", "Library", "CompilationCompleted"),
                     Path.Combine(Application.dataPath, "..", "Temp", "CompilationLog.txt")
                 };
@@ -190,6 +194,16 @@ namespace UnityEditorMCP.Handlers
                     {
                         try
                         {
+                            // Guard against pathological files: real compilation logs are small.
+                            // Skip oversized files so an unexpected multi-MB artifact can never
+                            // trigger long main-thread regex scans again.
+                            var fileInfo = new FileInfo(logPath);
+                            if (fileInfo.Length > 2 * 1024 * 1024)
+                            {
+                                Debug.LogWarning($"[CompilationHandler] Skipping compilation log {logPath}: file too large ({fileInfo.Length} bytes)");
+                                continue;
+                            }
+
                             var logContent = File.ReadAllText(logPath);
                             var parsedMessages = ParseCompilationErrors(logContent, logPath);
                             messages.AddRange(parsedMessages);
