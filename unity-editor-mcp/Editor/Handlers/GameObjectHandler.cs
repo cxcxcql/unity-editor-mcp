@@ -6,6 +6,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine.SceneManagement;
 using Newtonsoft.Json.Linq;
+using UnityEditorMCP.Helpers;
 
 namespace UnityEditorMCP.Handlers
 {
@@ -330,12 +331,14 @@ namespace UnityEditorMCP.Handlers
         /// <summary>
         /// 按名称、标签和层筛选已加载的场景对象。
         /// </summary>
-        /// <param name="parameters">检索条件、名称匹配方式以及是否跳过美术树。</param>
-        /// <returns>匹配对象数量与详情，或检索错误。</returns>
+        /// <param name="parameters">名称、标签、层、美术树开关及分页参数。</param>
+        /// <param name="szResponseId">TCP 回包中的请求 ID。</param>
+        /// <returns>所有匹配对象的数量及本页详情，或检索错误。</returns>
         /// <remarks>
         /// 遍历为 O(n)，n 为实际访问的节点数。剪枝模式按实例 ID 排序命中项，额外排序开销约为 O(m log m)，m 为命中数。
+        /// 仅本页生成路径和 Transform 详情并序列化。
         /// </remarks>
-        public static object FindGameObjects(JObject parameters)
+        public static object FindGameObjects(JObject parameters, string szResponseId = null)
         {
             try
             {
@@ -344,6 +347,7 @@ namespace UnityEditorMCP.Handlers
                 int? nLayer = parameters["layer"]?.ToObject<int>();
                 bool bExactMatch = parameters["exactMatch"]?.ToObject<bool>() ?? true;
                 bool bSkipArtNodes = parameters["skipArtNodes"]?.ToObject<bool>() ?? true;
+                (int nOffset, int nLimit) = Response.ReadSearchPage(parameters);
 
                 IEnumerable<GameObject> pCandidates;
                 if (bSkipArtNodes)
@@ -393,32 +397,49 @@ namespace UnityEditorMCP.Handlers
                     listResults.Sort((pLeft, pRight) => pLeft.GetInstanceID().CompareTo(pRight.GetInstanceID()));
                 }
 
-                var resultData = listResults.Select(pGameObject => new
-                {
-                    id = pGameObject.GetInstanceID(),
-                    name = pGameObject.name,
-                    path = GetGameObjectPath(pGameObject),
-                    tag = pGameObject.tag,
-                    layer = pGameObject.layer,
-                    isActive = pGameObject.activeSelf,
-                    transform = new
+                Dictionary<string, object> dicResult = new Dictionary<string, object> { ["count"] = listResults.Count };
+                return Response.CreateSearchPage(szResponseId, dicResult, "objects", listResults.Count, nOffset, nLimit,
+                    nIndex => DescribeFoundGameObject(listResults[nIndex]),
+                    nIndex => new
                     {
-                        position = new { x = pGameObject.transform.position.x, y = pGameObject.transform.position.y, z = pGameObject.transform.position.z },
-                        rotation = new { x = pGameObject.transform.rotation.eulerAngles.x, y = pGameObject.transform.rotation.eulerAngles.y, z = pGameObject.transform.rotation.eulerAngles.z },
-                        scale = new { x = pGameObject.transform.localScale.x, y = pGameObject.transform.localScale.y, z = pGameObject.transform.localScale.z }
-                    }
-                }).ToList();
-
-                return new
-                {
-                    count = resultData.Count,
-                    objects = resultData
-                };
+                        id = listResults[nIndex].GetInstanceID(),
+                        index = nIndex,
+                        truncated = true,
+                        reason = "RESULT_ITEM_TOO_LARGE"
+                    });
             }
-            catch (Exception ex)
+            catch (Exception pException)
             {
-                return new { error = $"Failed to find GameObjects: {ex.Message}" };
+                return new { error = $"Failed to find GameObjects: {pException.Message}" };
             }
+        }
+
+        /// <summary>生成对象查找单条命中的路径和 Transform 详情。</summary>
+        /// <param name="pGameObject">命中的场景对象。</param>
+        /// <returns>可序列化的对象详情。</returns>
+        /// <remarks>会沿父节点向上构建场景路径，主要开销取决于层级深度及路径长度。</remarks>
+        private static object DescribeFoundGameObject(GameObject pGameObject)
+        {
+            Transform pTransform = pGameObject.transform;
+            Vector3 pPosition = pTransform.position;
+            Vector3 pRotation = pTransform.rotation.eulerAngles;
+            Vector3 pScale = pTransform.localScale;
+
+            return new
+            {
+                id = pGameObject.GetInstanceID(),
+                name = pGameObject.name,
+                path = GetGameObjectPath(pGameObject),
+                tag = pGameObject.tag,
+                layer = pGameObject.layer,
+                isActive = pGameObject.activeSelf,
+                transform = new
+                {
+                    position = new { x = pPosition.x, y = pPosition.y, z = pPosition.z },
+                    rotation = new { x = pRotation.x, y = pRotation.y, z = pRotation.z },
+                    scale = new { x = pScale.x, y = pScale.y, z = pScale.z }
+                }
+            };
         }
 
         /// <summary>

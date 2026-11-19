@@ -1,5 +1,6 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
 import { findByComponentToolDefinition } from '../../tools/analysis/findByComponent.js';
+import { assertSearchPagination } from '../../tools/searchPagination.js';
 
 /**
  * Handler for the find_by_component tool
@@ -26,6 +27,7 @@ export class FindByComponentToolHandler extends BaseToolHandler {
       throw error;
     }
 
+    assertSearchPagination(args, result);
     return result;
   }
 }

@@ -207,6 +207,16 @@ const VEC = {
   },
 };
 
+const SEARCH_PAGE_GUIDANCE =
+  'Returns one page. Keep the same search filters and pass nextOffset as offset until hasMore is false. ' +
+  'If the scene or prefab assets change between pages, restart with offset=0. ' +
+  'limit defaults to 100 (max 1000); a page may be shorter to fit the response. ' +
+  'An item with truncated=true provides its identity only because its details exceed the response size.';
+const SEARCH_PAGE_PROPERTIES = {
+  offset: { type: 'integer', minimum: 0, maximum: 2147483647, default: 0, description: 'Zero-based offset; use nextOffset from the previous page.' },
+  limit: { type: 'integer', minimum: 1, maximum: 1000, default: 100, description: 'Maximum matches to return in this page.' },
+};
+
 function tool(name, description, properties = {}) {
   return {
     name,
@@ -295,13 +305,15 @@ const TOOLS = [
   tool(
     'find_gameobject',
     'Find GameObjects by name, tag, or layer. Params: name, tag, layer, exactMatch (bool, default true). ' +
-      'By default, skips objects named exactly "root" and their descendants. Set skipArtNodes=false to include them.',
+      'By default, skips objects named exactly "root" and their descendants. Set skipArtNodes=false only when you need to search those art nodes. ' +
+      SEARCH_PAGE_GUIDANCE,
     {
       name: { type: 'string' },
       tag: { type: 'string' },
       layer: { type: 'integer' },
       exactMatch: { type: 'boolean' },
-      skipArtNodes: { type: 'boolean' },
+      skipArtNodes: { type: 'boolean', default: true },
+      ...SEARCH_PAGE_PROPERTIES,
     }
   ),
 
@@ -355,13 +367,15 @@ const TOOLS = [
   tool(
     'find_by_component',
     'Find objects by component type. Params: componentType, includeInactive (bool), searchScope (scene|prefabs|all), matchExactType (bool). ' +
-      'Scene searches skip objects named exactly "root" and their descendants by default. Set skipArtNodes=false to include them.',
+      'Scene searches skip objects named exactly "root" and their descendants by default. Set skipArtNodes=false only when you need to search those art nodes. ' +
+      SEARCH_PAGE_GUIDANCE,
     {
       componentType: { type: 'string' },
       includeInactive: { type: 'boolean' },
       searchScope: { type: 'string', enum: ['scene', 'prefabs', 'all'] },
       matchExactType: { type: 'boolean' },
-      skipArtNodes: { type: 'boolean' },
+      skipArtNodes: { type: 'boolean', default: true },
+      ...SEARCH_PAGE_PROPERTIES,
     }
   ),
 
@@ -784,6 +798,14 @@ async function callTool(params) {
   try {
     const command = TOOL_COMMAND_MAP.get(name) || name;
     const result = await sendCommand(command, args);
+    if (name === 'find_gameobject' || name === 'find_by_component') {
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+      if ((args.offset !== undefined || args.limit !== undefined) && typeof result?.hasMore !== 'boolean') {
+        throw new Error('Unity MCP plugin did not return pagination metadata. Update the Unity plugin before requesting pages.');
+      }
+    }
     const text = JSON.stringify(result, null, 2);
     log(`ok: ${name} (${Date.now() - started}ms)`);
     return {

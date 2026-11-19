@@ -1,13 +1,18 @@
 export function toMcpToolResult(handlerResult, toolName) {
   if (!handlerResult || handlerResult.status !== 'error') {
     const structuredContent = normalizeStructuredContent(handlerResult?.result, toolName);
+    const isSearchPage = (toolName === 'find_gameobject' || toolName === 'find_by_component') &&
+      typeof structuredContent.hasMore === 'boolean';
+    const text = isSearchPage
+      ? JSON.stringify(structuredContent)
+      : toolName === 'get_unity_status'
+        ? JSON.stringify(structuredContent, null, 2)
+        : formatResultText(structuredContent);
     return {
       content: [
         {
           type: 'text',
-          text: toolName === 'get_unity_status'
-            ? JSON.stringify(structuredContent, null, 2)
-            : formatResultText(structuredContent)
+          text
         }
       ],
       structuredContent

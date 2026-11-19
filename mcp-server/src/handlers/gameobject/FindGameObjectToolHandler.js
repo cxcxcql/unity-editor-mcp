@@ -1,4 +1,5 @@
 import { BaseToolHandler } from '../base/BaseToolHandler.js';
+import { assertSearchPagination, searchPageGuidance, searchPageProperties } from '../../tools/searchPagination.js';
 
 /**
  * Handler for the find_gameobject tool
@@ -8,7 +9,9 @@ export class FindGameObjectToolHandler extends BaseToolHandler {
   constructor(unityConnection) {
     super(
       'find_gameobject',
-      'Find GameObjects in Unity scene by name, tag, or layer',
+      'Find GameObjects in Unity scene by name, tag, or layer. ' +
+        'By default, skips objects named exactly "root" and their descendants. ' +
+        'Set skipArtNodes=false only when you need to search those art nodes. ' + searchPageGuidance,
       {
         type: 'object',
         properties: {
@@ -32,8 +35,10 @@ export class FindGameObjectToolHandler extends BaseToolHandler {
           },
           skipArtNodes: {
             type: 'boolean',
-            description: 'Skip objects named exactly "root" and their descendants (default: true)'
-          }
+            default: true,
+            description: 'Skip objects named exactly "root" and their descendants. Set false only to search those art nodes.'
+          },
+          ...searchPageProperties
         },
         required: []
       }
@@ -98,8 +103,10 @@ export class FindGameObjectToolHandler extends BaseToolHandler {
       throw new Error(result.error);
     }
     
-    // Add summary information
-    if (result.objects && Array.isArray(result.objects)) {
+    assertSearchPagination(params, result);
+    if (typeof result.hasMore === 'boolean') {
+      result.summary = `Found ${result.count} GameObjects (returned ${result.returnedCount} in this page)`;
+    } else if (Array.isArray(result.objects)) {
       result.summary = this.generateSummary(result.objects, params);
     }
     

@@ -6,6 +6,7 @@ using System.Reflection;
 using UnityEngine;
 using UnityEditor;
 using Newtonsoft.Json.Linq;
+using UnityEditorMCP.Helpers;
 
 namespace UnityEditorMCP.Handlers
 {
@@ -940,12 +941,14 @@ namespace UnityEditorMCP.Handlers
         /// <summary>
         /// 在场景或预制资源中查找挂有指定类型组件的对象。
         /// </summary>
-        /// <param name="parameters">组件类型、查找范围、非激活对象与派生类型的筛选条件，以及场景美术树开关。</param>
-        /// <returns>命中详情、数量与摘要，或检索错误。</returns>
+        /// <param name="parameters">组件类型、搜索范围、匹配条件、美术树开关及分页参数。</param>
+        /// <param name="szResponseId">TCP 回包中的请求 ID。</param>
+        /// <returns>全量数量与摘要、本页命中详情，或检索错误。</returns>
         /// <remarks>
-        /// 场景遍历约为 O(n)，n 为实际访问的节点数，另有组件检查及命中项路径排序。搜索预制时会枚举、加载预制资源并检查其组件。
+        /// 每次查询检查范围内对象的组件，按路径排序命中项，排序约 O(n log n)，n 为命中数。搜索预制会枚举并加载预制资源。
+        /// 临时列表保存命中路径、对象引用和计数，只有本页提取派生类型并序列化。
         /// </remarks>
-        public static object FindByComponent(JObject parameters)
+        public static object FindByComponent(JObject parameters, string szResponseId = null)
         {
             try
             {
@@ -953,36 +956,36 @@ namespace UnityEditorMCP.Handlers
                 bool bIncludeInactive = parameters["includeInactive"]?.ToObject<bool>() ?? true;
                 string szSearchScope = parameters["searchScope"]?.ToString() ?? "scene";
                 bool bMatchExactType = parameters["matchExactType"]?.ToObject<bool>() ?? true;
+                (int nOffset, int nLimit) = Response.ReadSearchPage(parameters);
 
-                // Validate input
                 if (string.IsNullOrEmpty(szComponentType))
                 {
                     return new { error = "componentType is required" };
                 }
 
-                // 校验查找范围。
                 if (szSearchScope != "scene" && szSearchScope != "prefabs" && szSearchScope != "all")
                 {
                     return new { error = "Invalid searchScope. Must be one of: scene, prefabs, all" };
                 }
 
-                // Get the component type
-                Type targetType = GetTypeByName(szComponentType);
-                if (targetType == null)
+                Type pTargetType = GetTypeByName(szComponentType);
+                if (pTargetType == null)
                 {
                     return new { error = $"Invalid component type: {szComponentType}" };
                 }
 
-                if (!typeof(Component).IsAssignableFrom(targetType))
+                if (!typeof(Component).IsAssignableFrom(pTargetType))
                 {
                     return new { error = $"{szComponentType} is not a Component type" };
                 }
 
-                var results = new List<Dictionary<string, object>>();
-                var sceneCount = 0;
-                var prefabCount = 0;
+                List<(string szPath, GameObject pGameObject, string szPrefabGuid, int nComponentCount, bool bIsActive)> listResults =
+                    new List<(string szPath, GameObject pGameObject, string szPrefabGuid, int nComponentCount, bool bIsActive)>();
+                int nSceneCount = 0;
+                int nPrefabCount = 0;
+                int nActiveCount = 0;
 
-                // 保持旧查询的范围：包含非激活对象时只搜索活动场景，否则搜索所有场景中的激活对象。
+                // 包含非激活对象时只搜索活动场景，否则搜索所有场景中的激活对象。
                 if (szSearchScope == "scene" || szSearchScope == "all")
                 {
                     bool bSkipArtNodes = parameters["skipArtNodes"]?.ToObject<bool>() ?? true;
@@ -1004,139 +1007,178 @@ namespace UnityEditorMCP.Handlers
 
                     foreach (GameObject pGameObject in pSceneObjects)
                     {
-                        Component[] arrComponents = bMatchExactType
-                            ? pGameObject.GetComponents(targetType).Where(c => c != null && c.GetType() == targetType).ToArray()
-                            : pGameObject.GetComponents(targetType);
+                        Component[] arrComponents = pGameObject.GetComponents(pTargetType);
+                        if (bMatchExactType)
+                        {
+                            arrComponents = arrComponents.Where(pComponent => pComponent != null && pComponent.GetType() == pTargetType).ToArray();
+                        }
 
                         if (arrComponents.Length > 0)
                         {
-                            Dictionary<string, object> dicResult = new Dictionary<string, object>();
-                            dicResult["gameObject"] = pGameObject.name;
-                            dicResult["path"] = GetGameObjectPath(pGameObject);
-                            dicResult["componentCount"] = arrComponents.Length;
-                            dicResult["isActive"] = pGameObject.activeInHierarchy;
-
-                            if (!bMatchExactType)
+                            bool bIsActive = pGameObject.activeInHierarchy;
+                            listResults.Add((GetGameObjectPath(pGameObject), pGameObject, null, arrComponents.Length, bIsActive));
+                            nSceneCount++;
+                            if (bIsActive)
                             {
-                                // 返回命中的实际组件类型。
-                                dicResult["componentTypes"] = arrComponents
-                                    .Select(c => c.GetType().Name)
-                                    .Distinct()
-                                    .ToArray();
+                                nActiveCount++;
                             }
-
-                            if (szSearchScope == "all")
-                            {
-                                dicResult["location"] = "scene";
-                            }
-
-                            results.Add(dicResult);
-                            sceneCount++;
                         }
                     }
                 }
 
-                // Search in prefabs
+                // 每个预制资源作为一条命中，组件数量包含符合条件的后代节点。
                 if (szSearchScope == "prefabs" || szSearchScope == "all")
                 {
-                    var guids = AssetDatabase.FindAssets("t:Prefab");
-                    foreach (var guid in guids)
+                    string[] arrGuids = AssetDatabase.FindAssets("t:Prefab");
+                    foreach (string szGuid in arrGuids)
                     {
-                        var path = AssetDatabase.GUIDToAssetPath(guid);
-                        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-                        
-                        if (prefab == null) continue;
-
-                        var components = bMatchExactType
-                            ? prefab.GetComponentsInChildren(targetType, bIncludeInactive)
-                                .Where(c => c != null && c.GetType() == targetType)
-                                .ToArray()
-                            : prefab.GetComponentsInChildren(targetType, bIncludeInactive);
-
-                        if (components.Length > 0)
+                        string szPath = AssetDatabase.GUIDToAssetPath(szGuid);
+                        GameObject pPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(szPath);
+                        if (pPrefab == null)
                         {
-                            var result = new Dictionary<string, object>();
-                            result["gameObject"] = prefab.name;
-                            result["path"] = path;
-                            result["componentCount"] = components.Length;
-                            result["isActive"] = prefab.activeSelf;
+                            continue;
+                        }
 
-                            if (!bMatchExactType)
+                        Component[] arrComponents = pPrefab.GetComponentsInChildren(pTargetType, bIncludeInactive);
+                        if (bMatchExactType)
+                        {
+                            arrComponents = arrComponents.Where(pComponent => pComponent != null && pComponent.GetType() == pTargetType).ToArray();
+                        }
+
+                        if (arrComponents.Length > 0)
+                        {
+                            bool bIsActive = pPrefab.activeSelf;
+                            listResults.Add((szPath, pPrefab, szGuid, arrComponents.Length, bIsActive));
+                            nPrefabCount++;
+                            if (bIsActive)
                             {
-                                // Include actual component types found
-                                result["componentTypes"] = components
-                                    .Select(c => c.GetType().Name)
-                                    .Distinct()
-                                    .ToArray();
+                                nActiveCount++;
                             }
-
-                            if (szSearchScope == "all")
-                            {
-                                result["location"] = "prefab";
-                            }
-
-                            results.Add(result);
-                            prefabCount++;
                         }
                     }
                 }
 
-                // Sort results by path
-                results = results.OrderBy(r => r["path"].ToString()).ToList();
+                // 同名路径可来自不同对象或叠加场景，使用实例 ID 确定其分页次序。
+                listResults.Sort((pLeft, pRight) =>
+                {
+                    int nOrder = Comparer<string>.Default.Compare(pLeft.szPath, pRight.szPath);
+                    if (nOrder == 0)
+                    {
+                        nOrder = StringComparer.Ordinal.Compare(pLeft.szPath, pRight.szPath);
+                    }
+                    if (nOrder == 0)
+                    {
+                        nOrder = StringComparer.Ordinal.Compare(pLeft.szPrefabGuid, pRight.szPrefabGuid);
+                        if (nOrder == 0 && pLeft.szPrefabGuid == null)
+                        {
+                            nOrder = pLeft.pGameObject.GetInstanceID().CompareTo(pRight.pGameObject.GetInstanceID());
+                        }
+                    }
 
-                // Count active objects
-                var activeCount = results.Count(r => (bool)r["isActive"]);
+                    return nOrder;
+                });
 
-                // Build result
-                var finalResult = new Dictionary<string, object>();
-                finalResult["componentType"] = szComponentType;
-                finalResult["searchScope"] = szSearchScope;
-                finalResult["results"] = results;
-                finalResult["totalFound"] = results.Count;
-                finalResult["activeCount"] = activeCount;
-
+                // 所有计数和摘要都对应完整搜索，分页只切分详情。
+                int nTotalCount = listResults.Count;
+                Dictionary<string, object> dicResult = new Dictionary<string, object>
+                {
+                    ["componentType"] = szComponentType,
+                    ["searchScope"] = szSearchScope,
+                    ["totalFound"] = nTotalCount,
+                    ["activeCount"] = nActiveCount
+                };
                 if (szSearchScope == "all")
                 {
-                    finalResult["sceneCount"] = sceneCount;
-                    finalResult["prefabCount"] = prefabCount;
+                    dicResult["sceneCount"] = nSceneCount;
+                    dicResult["prefabCount"] = nPrefabCount;
                 }
 
-                // Generate summary
-                string summary;
-                if (results.Count == 0)
+                string szSummary;
+                if (nTotalCount == 0)
                 {
-                    summary = $"No GameObjects found with {szComponentType} component";
+                    szSummary = $"No GameObjects found with {szComponentType} component";
                 }
                 else
                 {
-                    string typeText = bMatchExactType ? szComponentType : $"{szComponentType}-derived";
-                    
+                    string szTypeText = bMatchExactType ? szComponentType : $"{szComponentType}-derived";
                     if (szSearchScope == "scene")
                     {
-                        summary = $"Found {results.Count} GameObject{(results.Count != 1 ? "s" : "")} with {typeText} component";
+                        szSummary = $"Found {nTotalCount} GameObject{(nTotalCount != 1 ? "s" : "")} with {szTypeText} component";
                     }
                     else if (szSearchScope == "prefabs")
                     {
-                        summary = $"Found {results.Count} prefab{(results.Count != 1 ? "s" : "")} with {typeText} component{(bMatchExactType ? "" : "s")}";
+                        szSummary = $"Found {nTotalCount} prefab{(nTotalCount != 1 ? "s" : "")} with {szTypeText} component{(bMatchExactType ? "" : "s")}";
                     }
-                    else // all
+                    else
                     {
-                        summary = $"Found {results.Count} GameObject{(results.Count != 1 ? "s" : "")} with {typeText} component ({sceneCount} in scene, {prefabCount} in prefabs)";
+                        szSummary = $"Found {nTotalCount} GameObject{(nTotalCount != 1 ? "s" : "")} with {szTypeText} component ({nSceneCount} in scene, {nPrefabCount} in prefabs)";
                     }
 
-                    if (activeCount < results.Count)
+                    if (nActiveCount < nTotalCount)
                     {
-                        summary += $" ({activeCount} active)";
+                        szSummary += $" ({nActiveCount} active)";
                     }
                 }
 
-                finalResult["summary"] = summary;
+                dicResult["summary"] = szSummary;
+                return Response.CreateSearchPage(szResponseId, dicResult, "results", nTotalCount, nOffset, nLimit,
+                    nIndex =>
+                    {
+                        (string szPath, GameObject pGameObject, string szPrefabGuid, int nComponentCount, bool bIsActive) = listResults[nIndex];
+                        bool bIsPrefab = szPrefabGuid != null;
+                        Dictionary<string, object> dicItem = new Dictionary<string, object>
+                        {
+                            ["gameObject"] = pGameObject.name,
+                            ["path"] = szPath,
+                            ["componentCount"] = nComponentCount,
+                            ["isActive"] = bIsActive
+                        };
 
-                return finalResult;
+                        if (!bMatchExactType)
+                        {
+                            Component[] arrComponents = bIsPrefab
+                                ? pGameObject.GetComponentsInChildren(pTargetType, bIncludeInactive)
+                                : pGameObject.GetComponents(pTargetType);
+                            dicItem["componentTypes"] = arrComponents
+                                .Where(pComponent => pComponent != null)
+                                .Select(pComponent => pComponent.GetType().Name)
+                                .Distinct()
+                                .ToArray();
+                        }
+
+                        if (szSearchScope == "all")
+                        {
+                            dicItem["location"] = bIsPrefab ? "prefab" : "scene";
+                        }
+
+                        return dicItem;
+                    },
+                    nIndex =>
+                    {
+                        (string _, GameObject pGameObject, string szPrefabGuid, int _, bool _) = listResults[nIndex];
+                        Dictionary<string, object> dicItem = new Dictionary<string, object>
+                        {
+                            ["index"] = nIndex,
+                            ["truncated"] = true,
+                            ["reason"] = "RESULT_ITEM_TOO_LARGE"
+                        };
+                        if (szPrefabGuid == null)
+                        {
+                            dicItem["location"] = "scene";
+                            dicItem["id"] = pGameObject.GetInstanceID();
+                        }
+                        else
+                        {
+                            dicItem["location"] = "prefab";
+                            dicItem["prefabGuid"] = szPrefabGuid;
+                        }
+
+                        return dicItem;
+                    });
             }
-            catch (Exception ex)
+            catch (Exception pException)
             {
-                return new { error = $"Failed to find GameObjects by component: {ex.Message}" };
+                return new { error = $"Failed to find GameObjects by component: {pException.Message}" };
             }
         }
 

@@ -50,7 +50,7 @@ describe('FindByComponentTool', () => {
 
     it('should have correct tool definition', () => {
         assert.equal(findByComponentToolDefinition.name, 'find_by_component');
-        assert.equal(findByComponentToolDefinition.description, 'Find all GameObjects that have a specific component type');
+        assert.match(findByComponentToolDefinition.description, /nextOffset/);
     });
 
     it('should have correct input schema', () => {

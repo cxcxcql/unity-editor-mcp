@@ -1,9 +1,13 @@
+import { assertSearchPagination, searchPageGuidance, searchPageProperties } from '../searchPagination.js';
+
 /**
  * Tool definition for find_by_component
  */
 export const findByComponentToolDefinition = {
     name: 'find_by_component',
-    description: 'Find all GameObjects that have a specific component type',
+    description: 'Find GameObjects that have a specific component type. ' +
+        'Scene searches skip objects named exactly "root" and their descendants by default. ' +
+        'Set skipArtNodes=false only when you need to search those art nodes. ' + searchPageGuidance,
     inputSchema: {
         type: 'object',
         properties: {
@@ -26,8 +30,10 @@ export const findByComponentToolDefinition = {
             },
             skipArtNodes: {
                 type: 'boolean',
-                description: 'Skip scene objects named exactly "root" and their descendants (default: true)'
-            }
+                default: true,
+                description: 'Skip scene objects named exactly "root" and their descendants. Set false only to search those art nodes.'
+            },
+            ...searchPageProperties
         },
         required: ['componentType']
     }
@@ -52,10 +58,11 @@ export async function findByComponentHandler(unityConnection, args) {
         }
 
         // Send command to Unity
-        const result = await unityConnection.sendCommand('find_by_component', args);
+        const response = await unityConnection.sendCommand('find_by_component', args);
 
-        // Handle Unity response
-        if (result.status === 'error') {
+        // Accept the legacy envelope and the decoded result returned by the Node connection.
+        const result = response.status === 'success' ? response.result : response;
+        if (result?.error || result?.status === 'error') {
             return {
                 content: [
                     {
@@ -67,15 +74,19 @@ export async function findByComponentHandler(unityConnection, args) {
             };
         }
 
-        // Success response
+        assertSearchPagination(args, result);
+        const paginated = typeof result?.hasMore === 'boolean';
         return {
             content: [
                 {
                     type: 'text',
-                    text: result.result.summary || `Found ${result.result.totalFound} GameObjects`
+                    text: paginated
+                        ? JSON.stringify(result)
+                        : result.summary || `Found ${result.totalFound} GameObjects`
                 }
             ],
-            isError: false
+            isError: false,
+            ...(paginated && { structuredContent: result })
         };
     } catch (error) {
         return {
