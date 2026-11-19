@@ -35,6 +35,12 @@ namespace UnityEditorMCP.Models
         public string AuthToken { get; set; }
         
         /// <summary>
+        /// 请求开始执行的最迟时间，单位为 Unix 毫秒。旧客户端可省略。
+        /// </summary>
+        [JsonProperty("deadlineUnixMs")]
+        public long? DeadlineUnixMs { get; set; }
+
+        /// <summary>
         /// Timestamp when the command was received
         /// </summary>
         [JsonIgnore]

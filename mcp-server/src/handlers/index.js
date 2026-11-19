@@ -7,6 +7,7 @@ export { BaseToolHandler } from './base/BaseToolHandler.js';
 
 // System handlers
 export { PingToolHandler } from './system/PingToolHandler.js';
+export { GetUnityStatusToolHandler } from './system/GetUnityStatusToolHandler.js';
 export { ReadLogsToolHandler } from './system/ReadLogsToolHandler.js';
 export { RefreshAssetsToolHandler } from './system/RefreshAssetsToolHandler.js';
 export { ListUnityInstancesToolHandler } from './system/ListUnityInstancesToolHandler.js';
@@ -106,6 +107,7 @@ export { CancelTestsToolHandler } from './test/CancelTestsToolHandler.js';
 
 // Import all handler classes at once
 import { PingToolHandler } from './system/PingToolHandler.js';
+import { GetUnityStatusToolHandler } from './system/GetUnityStatusToolHandler.js';
 import { ReadLogsToolHandler } from './system/ReadLogsToolHandler.js';
 import { RefreshAssetsToolHandler } from './system/RefreshAssetsToolHandler.js';
 import { ListUnityInstancesToolHandler } from './system/ListUnityInstancesToolHandler.js';
@@ -179,6 +181,7 @@ import { CancelTestsToolHandler } from './test/CancelTestsToolHandler.js';
 const HANDLER_CLASSES = [
   // System handlers
   PingToolHandler,
+  GetUnityStatusToolHandler,
   ReadLogsToolHandler,
   RefreshAssetsToolHandler,
   ListUnityInstancesToolHandler,

@@ -4,6 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { UnityConnection } from './unityConnection.js';
+import { getUnityStatus } from './unityStatus.js';
 import { registerMcpHandlers } from './mcpRegistration.js';
 import { createHandlers } from '../handlers/index.js';
 import { config, logger } from './config.js';
@@ -38,6 +39,26 @@ export async function startDaemonServer(options = {}) {
         };
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(health));
+        return;
+      }
+
+      if (pathname === '/status') {
+        const address = { host, port: actualPort };
+        if (!createAllowedHosts(address).includes(req.headers.host) ||
+            (req.headers.origin && !createAllowedOrigins(address).includes(req.headers.origin))) {
+          res.writeHead(403).end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          res.writeHead(405, { allow: 'GET' }).end();
+          return;
+        }
+
+        const status = typeof unityConnection.getUnityStatus === 'function'
+          ? await unityConnection.getUnityStatus()
+          : await getUnityStatus(config.unity, unityConnection.endpoint);
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(status));
         return;
       }
 
@@ -101,16 +122,22 @@ export async function startDaemonServer(options = {}) {
     });
   };
 
+  // Advertise HTTP status before trying to connect to Unity. Domain reload can delay the TCP connection.
+  await writeRegistry();
+  let closed = false;
   if (options.connectToUnity !== false) {
-    try {
-      await unityConnection.connect();
-    } catch (error) {
+    void unityConnection.connect().catch((error) => {
+      if (closed) {
+        return;
+      }
       lastError = error.message;
       logger.error('Initial daemon Unity connection failed:', error.message);
-    }
+      if (unityConnection.shouldAutoReconnect?.()) {
+        unityConnection.scheduleReconnect();
+      }
+    });
   }
 
-  await writeRegistry();
   const heartbeat = setInterval(() => {
     writeRegistry().catch((error) => {
       lastError = error.message;
@@ -120,12 +147,14 @@ export async function startDaemonServer(options = {}) {
   heartbeat.unref?.();
 
   const close = async () => {
+    closed = true;
     clearInterval(heartbeat);
     unityConnection.disconnect();
-    await new Promise((resolve) => httpServer.close(resolve));
+    const httpClosed = new Promise((resolve) => httpServer.close(resolve));
     const activeSessions = Array.from(sessions.values());
     sessions.clear();
     await Promise.all(activeSessions.map((session) => closeMcpSession(session)));
+    await httpClosed;
     await removeDaemonRegistry({ registryDir });
   };
 
@@ -137,6 +166,7 @@ export async function startDaemonServer(options = {}) {
     port,
     url: `http://${host}:${port}/mcp`,
     healthUrl: `http://${host}:${port}/health`,
+    statusUrl: `http://${host}:${port}/status`,
     close
   };
 }

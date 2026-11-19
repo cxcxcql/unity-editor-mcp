@@ -14,6 +14,16 @@ namespace UnityEditorMCP.Core
         private const string RegistryFolderName = ".unity-editor-mcp";
         private const string InstancesFolderName = "instances";
 
+        /// <summary>独立活动快照的目录名称。</summary>
+        private const string ActivityFolderName = "activity";
+
+        /// <summary>操作系统记录的进程启动时间，格式为 UTC ISO 8601。</summary>
+        private static readonly string ProcessStartedAt = ReadProcessStartedAt();
+
+        /// <summary>按当前 Unity 进程 ID 保存的活动快照路径。</summary>
+        private static string ActivityFilePath =>
+            Path.Combine(GetHomeDirectory(), RegistryFolderName, ActivityFolderName, $"{ProcessId}.json");
+
         private static readonly int ProcessId = Process.GetCurrentProcess().Id;
         private static readonly string InstanceId = Guid.NewGuid().ToString("N");
         private static readonly string InstanceAuthToken = Guid.NewGuid().ToString("N");
@@ -115,6 +125,93 @@ namespace UnityEditorMCP.Core
             }
         }
 
+
+        /// <summary>
+        /// 在编辑器主线程发布可跨域重载读取的活动快照。
+        /// </summary>
+        /// <param name="nPort">监听端口，首次完成绑定前为空。</param>
+        /// <param name="szState">当前活动阶段。</param>
+        /// <param name="szSource">活动来源。</param>
+        /// <param name="pActivityStartedAt">活动开始的 UTC 时间。</param>
+        /// <remarks>时间复杂度：O(1)，写入同目录临时文件后替换单个快照。</remarks>
+        public static void WriteActivity(int? nPort, string szState, string szSource, DateTime pActivityStartedAt)
+        {
+            string szPath = ActivityFilePath;
+            string szTempPath = szPath + ".tmp";
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(szPath));
+                string szJson = JsonConvert.SerializeObject(new
+                {
+                    schemaVersion = 1,
+                    pid = ProcessId,
+                    processStartedAt = ProcessStartedAt,
+                    instanceId = InstanceId,
+                    projectPath = ProjectPath,
+                    workspaceId = WorkspaceId,
+                    workspaceIdSource = WorkspaceIdSource,
+                    isBatchMode = Application.isBatchMode,
+                    host = "127.0.0.1",
+                    port = nPort,
+                    state = szState,
+                    source = szSource,
+                    activityStartedAt = pActivityStartedAt.ToString("o"),
+                    updatedAt = DateTime.UtcNow.ToString("o")
+                });
+
+                File.WriteAllText(szTempPath, szJson);
+                if (File.Exists(szPath))
+                {
+                    File.Replace(szTempPath, szPath, null);
+                }
+                else
+                {
+                    File.Move(szTempPath, szPath);
+                }
+            }
+            catch (Exception pException)
+            {
+                // 已成功发布的快照仍然可读，下一次心跳会重新写入临时文件。
+                UnityEngine.Debug.LogWarning($"[Unity Editor MCP] 无法写入活动快照：{pException.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 编辑器退出时删除活动快照和可能残留的临时文件。
+        /// </summary>
+        public static void DeleteActivity()
+        {
+            try
+            {
+                File.Delete(ActivityFilePath);
+                File.Delete(ActivityFilePath + ".tmp");
+            }
+            catch (Exception pException)
+            {
+                UnityEngine.Debug.LogWarning($"[Unity Editor MCP] 无法删除活动快照：{pException.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 获取跨脚本域保持稳定的 Unity 进程启动时间。
+        /// </summary>
+        /// <returns>UTC ISO 8601 时间，系统无法读取时为空。</returns>
+        private static string ReadProcessStartedAt()
+        {
+            try
+            {
+                using (Process pProcess = Process.GetCurrentProcess())
+                {
+                    return pProcess.StartTime.ToUniversalTime().ToString("o");
+                }
+            }
+            catch (Exception pException)
+            {
+                UnityEngine.Debug.LogWarning($"[Unity Editor MCP] 无法读取进程启动时间：{pException.Message}");
+                return null;
+            }
+        }
+
         public static object GetProjectInfo(int port, McpStatus status)
         {
             return CreatePayload(port, status, includeRegistryPath: true);
@@ -136,6 +233,14 @@ namespace UnityEditorMCP.Core
             }
         }
 
+        /// <summary>
+        /// 生成 TCP 实例登记或项目查询结果，共用相同的项目及进程身份。
+        /// </summary>
+        /// <param name="port">当前 TCP 监听端口。</param>
+        /// <param name="status">TCP 连接状态。</param>
+        /// <param name="includeRegistryPath">是否附带登记文件路径。</param>
+        /// <param name="includeAuthToken">是否写入仅供本机桥接使用的令牌。</param>
+        /// <returns>可序列化的实例信息。</returns>
         private static object CreatePayload(int port, McpStatus status, bool includeRegistryPath = false, bool includeAuthToken = false)
         {
             var activeScene = EditorSceneManager.GetActiveScene();
@@ -150,6 +255,8 @@ namespace UnityEditorMCP.Core
                 workspaceIdSource = WorkspaceIdSource,
                 git = GitInfo,
                 pid = ProcessId,
+                processStartedAt = ProcessStartedAt,
+                activityTracking = true,
                 host = "127.0.0.1",
                 port,
                 unityVersion = Application.unityVersion,

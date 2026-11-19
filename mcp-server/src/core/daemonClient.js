@@ -14,6 +14,7 @@ import {
   removeDaemonRegistry
 } from './daemonRegistry.js';
 import { getServerMetadata } from './serverMetadata.js';
+import { findUnityProjectRoot } from './unityDiscovery.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,6 +185,8 @@ async function waitForHealthyDaemon({ daemonConfig, expectedMetadata, getHealth,
 
 export function startDaemonProcess(options = {}) {
   const daemonConfig = { ...config.daemon, ...options };
+  const discovery = config.unity.discovery;
+  const projectPath = discovery.projectPath || findUnityProjectRoot(discovery.cwd);
   const logPath = daemonConfig.logPath || getDaemonLogPath({ registryDir: daemonConfig.registryDir });
   const args = [
     serverEntryPath,
@@ -204,7 +207,12 @@ export function startDaemonProcess(options = {}) {
       stdio: ['ignore', logFd, logFd],
       env: {
         ...process.env,
-        UNITY_MCP_DAEMON_AUTOSTART: 'false'
+        UNITY_MCP_DAEMON_AUTOSTART: 'false',
+        ...(projectPath && { UNITY_PROJECT_PATH: projectPath }),
+        ...(discovery.instanceId && { UNITY_MCP_INSTANCE_ID: discovery.instanceId }),
+        ...(discovery.workspaceId && { UNITY_MCP_WORKSPACE_ID: discovery.workspaceId }),
+        ...(discovery.allowSingleInstanceFallback && { UNITY_MCP_ALLOW_SINGLE_INSTANCE_FALLBACK: 'true' }),
+        ...(config.unity.hasExplicitPort && { UNITY_PORT: String(config.unity.port) })
       }
     });
   } finally {

@@ -45,7 +45,7 @@ export class PlayToolHandler extends BaseToolHandler {
     try {
       result = await this.unityConnection.sendCommand('play_game', params);
     } catch (error) {
-      if (isRecoverablePlayModeDisconnect(error)) {
+      if (error.details?.executionState !== 'not_started' && isRecoverablePlayModeDisconnect(error)) {
         return recoverPlayModeState(
           this.unityConnection,
           'Entered play mode after reconnect',

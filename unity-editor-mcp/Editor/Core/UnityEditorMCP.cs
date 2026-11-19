@@ -18,14 +18,21 @@ using Newtonsoft.Json.Linq;
 namespace UnityEditorMCP.Core
 {
     /// <summary>
-    /// Main Unity Editor MCP class that handles TCP communication and command processing
+    /// 管理 Unity MCP 的 TCP 连接和编辑器主线程命令执行。
     /// </summary>
     [InitializeOnLoad]
     public static class UnityEditorMCP
     {
         private static TcpListener tcpListener;
-        private static readonly Queue<(Command command, TcpClient client)> commandQueue = new Queue<(Command, TcpClient)>();
-        private static readonly object queueLock = new object();
+        /// <summary>尚未由主线程接管的请求，按接收顺序排列。</summary>
+        private static readonly LinkedList<PendingCommand> m_listCommandQueue = new LinkedList<PendingCommand>();
+
+        /// <summary>同步队列及连接内的取消索引。</summary>
+        private static readonly object m_pQueueLock = new object();
+
+        /// <summary>编辑器重入更新时，当前批命令是否仍在执行。</summary>
+        private static bool m_bProcessingQueue;
+
         private static CancellationTokenSource cancellationTokenSource;
         private static Task listenerTask;
         private const double RegistryHeartbeatIntervalSeconds = 5.0;
@@ -160,22 +167,23 @@ namespace UnityEditorMCP.Core
         private static int currentPort = DEFAULT_PORT;
         
         /// <summary>
-        /// Static constructor - called when Unity loads
+        /// 在编辑器加载脚本域时订阅事件并启动监听。
         /// </summary>
         static UnityEditorMCP()
         {
             mainThreadId = Thread.CurrentThread.ManagedThreadId;
             Debug.Log("[Unity Editor MCP] Initializing...");
+            UnityEditorActivity.Initialize();
             EditorApplication.update += ProcessCommandQueue;
-            EditorApplication.quitting += Shutdown;
-            AssemblyReloadEvents.beforeAssemblyReload += Shutdown;
+            EditorApplication.quitting += OnEditorQuitting;
+            AssemblyReloadEvents.beforeAssemblyReload += BeforeAssemblyReload;
             
             // Start the TCP listener
             StartTcpListener();
         }
         
         /// <summary>
-        /// Starts the TCP listener on the configured port
+        /// 绑定本地 TCP 端口并异步接受客户端连接。
         /// </summary>
         private static void StartTcpListener()
         {
@@ -209,12 +217,15 @@ namespace UnityEditorMCP.Core
 
                 tcpListener = newListener;
                 currentPort = boundPort;
-                
+                UnityEditorActivity.ListenerStarted(boundPort);
+                registryWritePending = true;
+
                 Status = McpStatus.Disconnected;
                 Debug.Log($"[Unity Editor MCP] TCP listener started on port {currentPort}");
                 
                 // Start accepting connections asynchronously
-                listenerTask = Task.Run(() => AcceptConnectionsAsync(cancellationTokenSource.Token));
+                CancellationToken pStopToken = cancellationTokenSource.Token;
+                listenerTask = Task.Run(() => AcceptConnectionsAsync(newListener, pStopToken));
             }
             catch (SocketException ex)
             {
@@ -255,7 +266,7 @@ namespace UnityEditorMCP.Core
         }
         
         /// <summary>
-        /// Stops the TCP listener
+        /// 停止 TCP 监听，取消客户端连接并清除临时端口登记。
         /// </summary>
         private static void StopTcpListener()
         {
@@ -272,6 +283,7 @@ namespace UnityEditorMCP.Core
                 Status = McpStatus.Disconnected;
                 Debug.Log("[Unity Editor MCP] TCP listener stopped");
                 UnityInstanceRegistry.Delete();
+                UnityEditorActivity.ListenerStopped();
             }
             catch (Exception ex)
             {
@@ -280,15 +292,18 @@ namespace UnityEditorMCP.Core
         }
         
         /// <summary>
-        /// Accepts incoming TCP connections asynchronously
+        /// 异步接收指定监听器的客户端。
         /// </summary>
-        private static async Task AcceptConnectionsAsync(CancellationToken cancellationToken)
+        /// <param name="pListener">接收客户端的监听器。</param>
+        /// <param name="cancellationToken">监听器关停标记。</param>
+        /// <returns>监听器关停后结束的异步任务。</returns>
+        private static async Task AcceptConnectionsAsync(TcpListener pListener, CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    var tcpClient = await AcceptClientAsync(tcpListener, cancellationToken);
+                    var tcpClient = await AcceptClientAsync(pListener, cancellationToken);
                     if (tcpClient != null)
                     {
                         Status = McpStatus.Connected;
@@ -331,255 +346,320 @@ namespace UnityEditorMCP.Core
             }
         }
         
+
         /// <summary>
-        /// Handles communication with a connected client
+        /// 从客户端读取 TCP 帧并及时处理鉴权、取消和入队。
         /// </summary>
-        private static async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
+        /// <param name="pClient">已连接的客户端。</param>
+        /// <param name="pCancellationToken">监听器关停标记。</param>
+        /// <returns>连接关闭后完成的异步任务。</returns>
+        /// <remarks>成本主要为 TCP I/O 和报文编解码。</remarks>
+        private static async Task HandleClientAsync(TcpClient pClient, CancellationToken pCancellationToken)
         {
+            ClientConnection pConnection = null;
+            CancellationTokenRegistration pCloseOnStop = pCancellationToken.Register(pClient.Close);
             try
             {
-                client.ReceiveTimeout = 30000; // 30 second timeout
-                client.SendTimeout = 30000;
-                
-                var buffer = new byte[4096];
-                var stream = client.GetStream();
-                var messageBuffer = new List<byte>();
-                
-                while (!cancellationToken.IsCancellationRequested && client.Connected)
+                pClient.ReceiveTimeout = 30000;
+                pClient.SendTimeout = 30000;
+                pConnection = new ClientConnection(pClient.GetStream(), pCancellationToken);
+                byte[] arrBuffer = new byte[4096];
+                List<byte> listMessageBuffer = new List<byte>();
+
+                while (!pCancellationToken.IsCancellationRequested)
                 {
-                    var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
-                    if (bytesRead == 0)
+                    int nBytesRead = await pConnection.Stream.ReadAsync(arrBuffer, 0, arrBuffer.Length, pCancellationToken);
+                    if (nBytesRead == 0)
                     {
-                        // Client disconnected
                         break;
                     }
-                    
-                    // Add received bytes to message buffer
-                    for (int i = 0; i < bytesRead; i++)
+
+                    for (int nIndex = 0; nIndex < nBytesRead; nIndex++)
                     {
-                        messageBuffer.Add(buffer[i]);
+                        listMessageBuffer.Add(arrBuffer[nIndex]);
                     }
-                    
-                    // Process complete messages
-                    while (messageBuffer.Count >= 4)
+
+                    while (listMessageBuffer.Count >= 4)
                     {
-                        // Read message length (first 4 bytes, big-endian)
-                        var lengthBytes = messageBuffer.GetRange(0, 4).ToArray();
-                        if (BitConverter.IsLittleEndian)
+                        int nMessageLength = listMessageBuffer[0] << 24 | listMessageBuffer[1] << 16 |
+                            listMessageBuffer[2] << 8 | listMessageBuffer[3];
+                        if (nMessageLength <= 0 || nMessageLength > int.MaxValue - 4)
                         {
-                            Array.Reverse(lengthBytes);
+                            throw new System.IO.InvalidDataException("Unity MCP TCP 帧长度无效。");
                         }
-                        var messageLength = BitConverter.ToInt32(lengthBytes, 0);
-                        
-                        // Check if we have the complete message
-                        if (messageBuffer.Count >= 4 + messageLength)
+
+                        if (listMessageBuffer.Count < nMessageLength + 4)
                         {
-                            // Extract message
-                            var messageBytes = messageBuffer.GetRange(4, messageLength).ToArray();
-                            messageBuffer.RemoveRange(0, 4 + messageLength);
-                            
-                            var json = Encoding.UTF8.GetString(messageBytes);
-                            Debug.Log($"[Unity Editor MCP] Received command (length={messageLength}): {RedactCommandJson(json)}");
-                            
-                            try
-                            {
-                                // Handle special ping command
-                                if (json.Trim().ToLower() == "ping")
-                                {
-                                    var authError = Response.ErrorResult(
-                                        "Plain ping requires an authenticated JSON command envelope",
-                                        "AUTH_FAILED",
-                                        null
-                                    );
-                                    await SendFramedMessage(stream, authError, cancellationToken);
-                                    continue;
-                                }
-                                
-                                // Parse command
-                                var command = JsonConvert.DeserializeObject<Command>(json);
-                                if (command != null)
-                                {
-                                    // Queue command for processing on main thread
-                                    lock (queueLock)
-                                    {
-                                        commandQueue.Enqueue((command, client));
-                                    }
-                                }
-                                else
-                                {
-                                    var errorResponse = Response.ErrorResult("Invalid command format", "PARSE_ERROR", null);
-                                    await SendFramedMessage(stream, errorResponse, cancellationToken);
-                                }
-                            }
-                            catch (JsonException ex)
-                            {
-                                var errorResponse = Response.ErrorResult($"JSON parsing error: {ex.Message}", "JSON_ERROR", null);
-                                await SendFramedMessage(stream, errorResponse, cancellationToken);
-                            }
-                        }
-                        else
-                        {
-                            // Not enough data yet, wait for more
                             break;
+                        }
+
+                        byte[] arrMessage = listMessageBuffer.GetRange(4, nMessageLength).ToArray();
+                        listMessageBuffer.RemoveRange(0, nMessageLength + 4);
+
+                        string szJson = Encoding.UTF8.GetString(arrMessage);
+                        Debug.Log($"[Unity Editor MCP] Received command (length={nMessageLength}): {RedactCommandJson(szJson)}");
+                        string szResponse = ReceiveCommand(pConnection, szJson);
+                        if (szResponse != null)
+                        {
+                            _ = pConnection.SendResponseAsync(szResponse);
                         }
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception pException)
             {
-                if (!cancellationToken.IsCancellationRequested)
+                if (!pCancellationToken.IsCancellationRequested)
                 {
-                    Debug.LogError($"[Unity Editor MCP] Client handler error: {ex}");
+                    Debug.LogError($"[Unity Editor MCP] Client handler error: {pException}");
                 }
             }
             finally
             {
-                client?.Close();
+                if (pConnection != null)
+                {
+                    pConnection.RemovePendingCommands();
+                }
+
+                pCloseOnStop.Dispose();
+                pClient.Close();
                 if (Status == McpStatus.Connected)
                 {
                     Status = McpStatus.Disconnected;
                 }
+
                 Debug.Log("[Unity Editor MCP] Client disconnected");
             }
         }
-        
+
         /// <summary>
-        /// Sends a framed message over the stream
+        /// 鉴权后接收普通命令或撤销当前连接的待执行请求。
         /// </summary>
-        private static async Task SendFramedMessage(NetworkStream stream, string message, CancellationToken cancellationToken)
+        /// <param name="pConnection">发送命令的客户端连接。</param>
+        /// <param name="szJson">收到的 JSON 报文。</param>
+        /// <returns>需要立即发送的回应，无需回应或正常入队时为空。</returns>
+        /// <remarks>时间复杂度：O(n)，n 为 JSON 报文长度。待执行命令索引通常以常数时间处理。</remarks>
+        private static string ReceiveCommand(ClientConnection pConnection, string szJson)
         {
-            var messageBytes = Encoding.UTF8.GetBytes(message);
-            var lengthBytes = BitConverter.GetBytes(messageBytes.Length);
-            
-            // Convert to big-endian
-            if (BitConverter.IsLittleEndian)
+            if (string.Equals(szJson.Trim(), "ping", StringComparison.OrdinalIgnoreCase))
             {
-                Array.Reverse(lengthBytes);
-            }
-            
-            Debug.Log($"[Unity Editor MCP] Sending response (length={messageBytes.Length}): {message}");
-            
-            // Write length prefix
-            await stream.WriteAsync(lengthBytes, 0, 4, cancellationToken);
-            // Write message
-            await stream.WriteAsync(messageBytes, 0, messageBytes.Length, cancellationToken);
-            await stream.FlushAsync(cancellationToken);
-        }
-        
-        /// <summary>
-        /// Processes queued commands on the Unity main thread
-        /// </summary>
-        private static void ProcessCommandQueue()
-        {
-            lock (queueLock)
-            {
-                while (commandQueue.Count > 0)
-                {
-                    var (command, client) = commandQueue.Dequeue();
-                    ProcessCommand(command, client);
-                }
+                return Response.ErrorResult("Plain ping requires an authenticated JSON command envelope", "AUTH_FAILED", null);
             }
 
+            Command pCommand;
+            try
+            {
+                pCommand = JsonConvert.DeserializeObject<Command>(szJson);
+            }
+            catch (JsonException pException)
+            {
+                return Response.ErrorResult($"JSON parsing error: {pException.Message}", "JSON_ERROR", null);
+            }
+
+            if (pCommand == null)
+            {
+                return Response.ErrorResult("Invalid command format", "PARSE_ERROR", null);
+            }
+
+            if (!IsAuthorized(pCommand))
+            {
+                return Response.ErrorResult(pCommand.Id, "Invalid or missing Unity Editor MCP auth token",
+                    "AUTH_FAILED", new { commandType = pCommand.Type, executionState = "not_started" });
+            }
+
+            lock (m_pQueueLock)
+            {
+                if (string.Equals(pCommand.Type, "cancel_command", StringComparison.OrdinalIgnoreCase))
+                {
+                    string szCommandId = pCommand.Parameters?["commandId"]?.ToString();
+                    if (!string.IsNullOrEmpty(szCommandId) && pConnection.PendingCommands.TryGetValue(szCommandId, out LinkedListNode<PendingCommand> pCanceled))
+                    {
+                        m_listCommandQueue.Remove(pCanceled);
+                        pConnection.PendingCommands.Remove(szCommandId);
+                    }
+
+                    return null;
+                }
+
+                string szRejection = GetCommandRejection(pCommand);
+                if (szRejection != null)
+                {
+                    return szRejection;
+                }
+
+                string szQueueId = string.IsNullOrEmpty(pCommand.Id) ? Guid.NewGuid().ToString("N") : pCommand.Id;
+                if (pConnection.PendingCommands.ContainsKey(szQueueId))
+                {
+                    return Response.ErrorResult(pCommand.Id, "Unity MCP 请求 ID 正在使用。", "DUPLICATE_COMMAND_ID", null);
+                }
+
+                PendingCommand pPending = new PendingCommand(pCommand, pConnection, szQueueId);
+                pConnection.PendingCommands.Add(szQueueId, m_listCommandQueue.AddLast(pPending));
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 在接收和开始执行前检查请求有效期及缓存中的忙碌状态。
+        /// </summary>
+        /// <param name="pCommand">待检查的请求。</param>
+        /// <returns>确认未执行时的结构化错误，可以继续处理时为空。</returns>
+        private static string GetCommandRejection(Command pCommand)
+        {
+            if (pCommand.DeadlineUnixMs.HasValue && pCommand.DeadlineUnixMs.Value <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            {
+                return Response.ErrorResult(pCommand.Id, "请求已过期，本次操作未执行。", "UNITY_REQUEST_EXPIRED",
+                    new { executionState = "not_started" });
+            }
+
+            if (UnityEditorActivity.TryGetBusy(out string szState, out string szMessage))
+            {
+                return Response.ErrorResult(pCommand.Id, szMessage, "UNITY_BUSY",
+                    new { state = szState, executionState = "not_started", retryAfterMs = UnityEditorActivity.RetryAfterMs });
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 更新实例心跳，并在 Unity 主线程按顺序处理队列。
+        /// </summary>
+        /// <remarks>时间复杂度约为 O(n)，n 为出队请求数，实际耗时主要由调用的编辑器命令和 I/O 决定。</remarks>
+        private static void ProcessCommandQueue()
+        {
             if (tcpListener != null &&
                 (registryWritePending || EditorApplication.timeSinceStartup - lastRegistryWriteTime >= RegistryHeartbeatIntervalSeconds))
             {
                 WriteInstanceRegistry();
             }
+
+            UnityEditorActivity.OnEditorUpdate(tcpListener != null);
+
+            if (m_bProcessingQueue)
+            {
+                return;
+            }
+
+            int nQueuedAtUpdate;
+            lock (m_pQueueLock)
+            {
+                nQueuedAtUpdate = m_listCommandQueue.Count;
+            }
+
+            // 每次更新只处理有限数量的命令，让持续进入的请求留到下一次更新。
+            m_bProcessingQueue = true;
+            try
+            {
+                for (int nIndex = 0; nIndex < nQueuedAtUpdate; nIndex++)
+                {
+                    PendingCommand pPending;
+                    string szResponse;
+                    lock (m_pQueueLock)
+                    {
+                        LinkedListNode<PendingCommand> pNext = m_listCommandQueue.First;
+                        if (pNext == null)
+                        {
+                            break;
+                        }
+
+                        pPending = pNext.Value;
+                        m_listCommandQueue.RemoveFirst();
+                        pPending.Connection.PendingCommands.Remove(pPending.QueueId);
+                        if (pPending.Connection.StopToken.IsCancellationRequested)
+                        {
+                            continue;
+                        }
+
+                        // 取消先取得锁时会移除请求。通过校验后由主线程接管，取消不能中止已开始的操作。
+                        szResponse = GetCommandRejection(pPending.Command);
+                    }
+
+                    if (szResponse == null)
+                    {
+                        szResponse = ProcessCommand(pPending.Command);
+                    }
+
+                    _ = pPending.Connection.SendResponseAsync(szResponse);
+                }
+            }
+            finally
+            {
+                m_bProcessingQueue = false;
+            }
         }
-        
+
         /// <summary>
-        /// Processes a single command
+        /// 执行已由主线程接管的请求，返回原有格式的工具结果。
         /// </summary>
-        private static async void ProcessCommand(Command command, TcpClient client)
+        /// <param name="pCommand">通过执行前校验的请求。</param>
+        /// <returns>工具执行结果或执行期间发生的错误。</returns>
+        /// <remarks>耗时取决于编辑器命令。部分命令会访问资源或保存场景与预制。</remarks>
+        private static string ProcessCommand(Command pCommand)
         {
             try
             {
-                Debug.Log($"[Unity Editor MCP] Processing command: {command}");
-                
-                string response;
-
-                if (!IsAuthorized(command))
+                Debug.Log($"[Unity Editor MCP] Processing command: {pCommand}");
+                if (ContextSwitchCommands.Contains(pCommand.Type))
                 {
-                    response = Response.ErrorResult(
-                        command.Id,
-                        "Invalid or missing Unity Editor MCP auth token",
-                        "AUTH_FAILED",
-                        new { commandType = command.Type }
-                    );
+                    SceneSaveHelper.SaveSceneIfDirty();
                 }
-                else
-                {
-                    // 上下文切换前先保存，避免 dirty 场景/prefab 触发 Unity 确认框而阻塞
-                    if (ContextSwitchCommands.Contains(command.Type))
-                    {
-                        SceneSaveHelper.SaveSceneIfDirty();
-                    }
 
-                    if (TryExecuteRegisteredCommand(command, out object commandResult))
-                    {
-                        response = Response.SuccessResult(command.Id, commandResult);
-
-                        // 写类命令成功后自动保存，让修改立即落盘
-                        if (WriteCommands.Contains(command.Type))
-                        {
-                            SceneSaveHelper.SaveSceneIfDirty();
-                        }
-                    }
-                    else
-                    {
-                        response = Response.ErrorResult(
-                            command.Id,
-                            $"Unknown command type: {command.Type}",
-                            "UNKNOWN_COMMAND",
-                            new { commandType = command.Type }
-                        );
-                    }
-                }
-                
-                // Send response
-                if (client.Connected)
+                if (!TryExecuteRegisteredCommand(pCommand, out object pResult))
                 {
-                    await SendFramedMessage(client.GetStream(), response, CancellationToken.None);
+                    return Response.ErrorResult(pCommand.Id, $"Unknown command type: {pCommand.Type}", "UNKNOWN_COMMAND",
+                        new { commandType = pCommand.Type, executionState = "not_started" });
                 }
+
+                string szResponse = Response.SuccessResult(pCommand.Id, pResult);
+                if (WriteCommands.Contains(pCommand.Type))
+                {
+                    SceneSaveHelper.SaveSceneIfDirty();
+                }
+
+                return szResponse;
             }
-            catch (Exception ex)
+            catch (Exception pException)
             {
-                Debug.LogError($"[Unity Editor MCP] Error processing command {command}: {ex}");
-                
-                try
-                {
-                    if (client.Connected)
+                Debug.LogError($"[Unity Editor MCP] Error processing command {pCommand}: {pException}");
+                return Response.ErrorResult(pCommand.Id, $"Internal error: {pException.Message}", "INTERNAL_ERROR",
+                    new
                     {
-                        var errorResponse = Response.ErrorResult(
-                            command.Id,
-                            $"Internal error: {ex.Message}", 
-                            "INTERNAL_ERROR",
-                            new { 
-                                commandType = command.Type,
-                                stackTrace = ex.StackTrace
-                            }
-                        );
-                        await SendFramedMessage(client.GetStream(), errorResponse, CancellationToken.None);
-                    }
-                }
-                catch
-                {
-                    // Best effort - ignore errors when sending error response
-                }
+                        commandType = pCommand.Type,
+                        stackTrace = pException.StackTrace,
+                        executionState = "unknown"
+                    });
             }
         }
-        
+
         /// <summary>
-        /// Shuts down the MCP system
+        /// 在域重载前保存重载快照，再关闭监听和域内事件。
+        /// </summary>
+        private static void BeforeAssemblyReload()
+        {
+            UnityEditorActivity.BeforeAssemblyReload();
+            Shutdown();
+        }
+
+        /// <summary>
+        /// 在编辑器退出时停止服务并移除活动快照。
+        /// </summary>
+        private static void OnEditorQuitting()
+        {
+            Shutdown();
+            UnityInstanceRegistry.DeleteActivity();
+        }
+
+        /// <summary>
+        /// 关闭当前域的监听和事件订阅。
         /// </summary>
         private static void Shutdown()
         {
             Debug.Log("[Unity Editor MCP] Shutting down...");
             StopTcpListener();
-            UnityInstanceRegistry.Delete();
             EditorApplication.update -= ProcessCommandQueue;
-            EditorApplication.quitting -= Shutdown;
-            AssemblyReloadEvents.beforeAssemblyReload -= Shutdown;
+            EditorApplication.quitting -= OnEditorQuitting;
+            AssemblyReloadEvents.beforeAssemblyReload -= BeforeAssemblyReload;
+            UnityEditorActivity.Destroy();
         }
         
         /// <summary>
@@ -781,5 +861,123 @@ namespace UnityEditorMCP.Core
                 return json;
             }
         }
+
+        #region 待处理请求与客户端连接
+
+        /// <summary>
+        /// 保存等待编辑器主线程执行的请求及所属客户端。
+        /// </summary>
+        private sealed class PendingCommand
+        {
+            /// <summary>待执行的请求。</summary>
+            public Command Command { get; }
+
+            /// <summary>发送请求的客户端连接。</summary>
+            public ClientConnection Connection { get; }
+
+            /// <summary>连接内的待执行命令索引键。</summary>
+            public string QueueId { get; }
+
+            /// <summary>
+            /// 记录请求与取消索引。
+            /// </summary>
+            /// <param name="pCommand">待执行的请求。</param>
+            /// <param name="pConnection">发送请求的客户端连接。</param>
+            /// <param name="szQueueId">连接内的请求索引键。</param>
+            public PendingCommand(Command pCommand, ClientConnection pConnection, string szQueueId)
+            {
+                Command = pCommand;
+                Connection = pConnection;
+                QueueId = szQueueId;
+            }
+        }
+
+        /// <summary>
+        /// 保存客户端流和待执行请求，并串行发送 TCP 响应帧。
+        /// </summary>
+        private sealed class ClientConnection
+        {
+            /// <summary>保证同一连接的帧头与正文连续写入。</summary>
+            private readonly SemaphoreSlim m_pSendLock = new SemaphoreSlim(1);
+
+            /// <summary>客户端的 TCP 网络流。</summary>
+            public NetworkStream Stream { get; }
+
+            /// <summary>监听器停止时触发的取消标记。</summary>
+            public CancellationToken StopToken { get; }
+
+            /// <summary>本连接尚未被主线程接管的请求，仅在队列锁内访问。</summary>
+            public Dictionary<string, LinkedListNode<PendingCommand>> PendingCommands { get; } =
+                new Dictionary<string, LinkedListNode<PendingCommand>>(StringComparer.Ordinal);
+
+            /// <summary>
+            /// 创建客户端连接的命令和响应上下文。
+            /// </summary>
+            /// <param name="pStream">客户端网络流。</param>
+            /// <param name="pStopToken">监听器关停标记。</param>
+            public ClientConnection(NetworkStream pStream, CancellationToken pStopToken)
+            {
+                Stream = pStream;
+                StopToken = pStopToken;
+            }
+
+            /// <summary>
+            /// 在客户端断开时移除它尚未开始的请求。
+            /// </summary>
+            /// <remarks>时间复杂度：O(n)，n 为该连接中仍在排队的请求数。</remarks>
+            public void RemovePendingCommands()
+            {
+                lock (m_pQueueLock)
+                {
+                    foreach (LinkedListNode<PendingCommand> pPending in PendingCommands.Values)
+                    {
+                        m_listCommandQueue.Remove(pPending);
+                    }
+
+                    PendingCommands.Clear();
+                }
+            }
+
+            /// <summary>
+            /// 串行发送带长度前缀的工具回应。
+            /// </summary>
+            /// <param name="szResponse">已序列化的 JSON 回应。</param>
+            /// <returns>本次发送尝试结束后的异步任务。</returns>
+            /// <remarks>时间复杂度：O(n)，n 为响应长度，开销包括 UTF-8 编码和 TCP 写入。</remarks>
+            public async Task SendResponseAsync(string szResponse)
+            {
+                try
+                {
+                    await m_pSendLock.WaitAsync(StopToken).ConfigureAwait(false);
+                    try
+                    {
+                        byte[] arrMessage = Encoding.UTF8.GetBytes(szResponse);
+                        byte[] arrLength = BitConverter.GetBytes(arrMessage.Length);
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            Array.Reverse(arrLength);
+                        }
+
+                        await Stream.WriteAsync(arrLength, 0, arrLength.Length, StopToken).ConfigureAwait(false);
+                        await Stream.WriteAsync(arrMessage, 0, arrMessage.Length, StopToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        m_pSendLock.Release();
+                    }
+                }
+                catch (Exception pException)
+                {
+                    if (!StopToken.IsCancellationRequested)
+                    {
+                        Debug.LogWarning($"[Unity Editor MCP] 无法发送命令回应：{pException.Message}");
+                        // 写入失败时可能已经发送了半帧。关闭连接，避免后续帧从错误的边界被解析。
+                        Stream.Close();
+                    }
+                }
+            }
+        }
+
+        #endregion
     }
 }

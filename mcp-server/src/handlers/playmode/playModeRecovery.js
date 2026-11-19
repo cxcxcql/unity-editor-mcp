@@ -139,7 +139,7 @@ export async function waitForEditorState(unityConnection, predicate, options = {
         recoveryActions.push(await activateUnityEditor(options));
       }
     } catch (error) {
-      if (!isRecoverablePlayModeDisconnect(error)) {
+      if (!isRecoverablePlayModeDisconnect(error) && error.code !== 'UNITY_BUSY' && error.code !== 'UNITY_STATUS_UNVERIFIED') {
         throw error;
       }
 

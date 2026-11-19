@@ -28,6 +28,8 @@ export async function main() {
 export async function startStdioDaemonProxy(customConfig = config, options = {}) {
   let cachedClient = null;
   let cachedTransport = null;
+  let clientConnection = null;
+  let staleClient = null;
   const server = new Server(
     {
       name: customConfig.server.name,
@@ -41,28 +43,42 @@ export async function startStdioDaemonProxy(customConfig = config, options = {})
   );
 
   registerDaemonProxyHandlers(server, {
-    getClient: async ({ forceRefresh } = {}) => {
-      if (cachedClient && !forceRefresh) {
+    getClient: async ({ forceRefresh, failedClient } = {}) => {
+      if (clientConnection) {
+        return clientConnection;
+      }
+      const refresh = cachedClient === staleClient || (forceRefresh && cachedClient === failedClient);
+      if (cachedClient && !refresh) {
         return cachedClient;
       }
 
-      if (forceRefresh) {
+      clientConnection = (async () => {
         await closeQuietly(cachedTransport);
         await closeQuietly(cachedClient);
         cachedClient = null;
         cachedTransport = null;
-      }
+        staleClient = null;
 
-      const connection = await createDaemonMcpClient({
-        ...customConfig.daemon,
-        ...(options.daemon || {})
-      });
-      cachedClient = connection.client;
-      cachedTransport = connection.transport;
-      return cachedClient;
+        const connection = await createDaemonMcpClient({
+          ...customConfig.daemon,
+          ...(options.daemon || {})
+        });
+        cachedClient = connection.client;
+        cachedTransport = connection.transport;
+        return cachedClient;
+      })();
+      try {
+        return await clientConnection;
+      } finally {
+        clientConnection = null;
+      }
     },
-    onClientError: async (error, context = {}) => {
-      logger.warn(`Daemon MCP ${context.method || 'request'} failed; refreshing shim transport: ${error.message}`);
+    onClientError: (error, context = {}) => {
+      logger.warn(`Daemon MCP ${context.method || 'request'} failed: ${error.message}`);
+      // Timeouts do not make the shared SDK connection unusable.
+      if (context.failedClient && /session|connection closed|fetch failed|not connected/i.test(error.message)) {
+        staleClient = context.failedClient;
+      }
     }
   });
 
@@ -120,7 +136,9 @@ export async function startDirectStdioServer(customConfig = config) {
       await unityConnection.connect();
     } catch (error) {
       logger.error('Initial Unity connection failed:', error.message);
-      logger.info('Unity connection will retry automatically');
+      if (unityConnection.shouldAutoReconnect()) {
+        unityConnection.scheduleReconnect();
+      }
     }
 
     const shutdown = async () => {

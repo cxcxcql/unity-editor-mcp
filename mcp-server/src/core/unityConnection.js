@@ -1,7 +1,19 @@
 import net from 'net';
 import { EventEmitter } from 'events';
+import { AsyncLocalStorage } from 'async_hooks';
 import { config, logger } from './config.js';
 import { resolveUnityEndpoint, readUnityInstances } from './unityDiscovery.js';
+import { createUnityBusyError, getUnityStatus } from './unityStatus.js';
+
+const commandContext = new AsyncLocalStorage();
+
+export function withUnityCommandSignal(signal, operation) {
+  return commandContext.run({ signal, mayHaveStarted: false }, operation);
+}
+
+export function unityCommandMayHaveStarted() {
+  return commandContext.getStore()?.mayHaveStarted === true;
+}
 
 /**
  * Manages TCP connection to Unity Editor
@@ -20,6 +32,7 @@ export class UnityConnection extends EventEmitter {
     this.commandQueue = [];
     this.commandInFlight = false;
     this.connectPromise = null;
+    this.connectionGeneration = 0;
     this.activeConnectReject = null;
     this.isDisconnecting = false;
     this.messageBuffer = Buffer.alloc(0);
@@ -54,7 +67,14 @@ export class UnityConnection extends EventEmitter {
       throw new Error('Unity connection disabled in test environment');
     }
 
-    const endpoint = await this.resolveEndpoint();
+    const generation = this.connectionGeneration;
+    const endpoint = await this.resolveEndpoint({
+      validate: () => {
+        if (generation !== this.connectionGeneration) {
+          throw createConnectionClosedError();
+        }
+      }
+    });
 
     return new Promise((resolve, reject) => {
       logger.info(`Connecting to Unity at ${endpoint.host}:${endpoint.port} (${endpoint.source})...`);
@@ -152,7 +172,6 @@ export class UnityConnection extends EventEmitter {
         
         logger.info('Disconnected from Unity Editor');
         this.connected = false;
-        const wasSocket = this.socket;
         this.socket = null;
         this.endpoint = null;
         
@@ -214,19 +233,22 @@ export class UnityConnection extends EventEmitter {
       process.env.DISABLE_AUTO_RECONNECT !== 'true';
   }
 
-  async resolveEndpoint() {
-    this.endpoint = await resolveUnityEndpoint({
+  async resolveEndpoint({ validate, ignoreCached = false } = {}) {
+    const endpoint = await resolveUnityEndpoint({
       unityConfig: this.config.unity,
-      lastEndpoint: this.endpoint,
+      lastEndpoint: ignoreCached ? null : this.endpoint,
       cwd: this.config.unity.discovery?.cwd || process.cwd()
     });
-    return this.endpoint;
+    validate?.();
+    this.endpoint = endpoint;
+    return endpoint;
   }
 
   /**
    * Disconnects from Unity Editor
    */
   disconnect() {
+    this.connectionGeneration++;
     this.isDisconnecting = true;
     
     if (this.reconnectTimer) {
@@ -269,7 +291,8 @@ export class UnityConnection extends EventEmitter {
 
     const queued = this.commandQueue.splice(0);
     for (const command of queued) {
-      command.reject(error);
+      command.cleanup();
+      command.reject(withExecutionState(error, 'not_started'));
     }
   }
 
@@ -288,13 +311,18 @@ export class UnityConnection extends EventEmitter {
 
     logger.info(`Scheduling reconnection in ${delay}ms (attempt ${this.reconnectAttempts + 1})`);
 
+    const generation = this.connectionGeneration;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.reconnectAttempts++;
       this.connect().catch((error) => {
         logger.error('Reconnection failed:', error.message);
+        if (generation === this.connectionGeneration && this.shouldAutoReconnect()) {
+          this.scheduleReconnect();
+        }
       });
     }, delay);
+    this.reconnectTimer.unref?.();
   }
 
   /**
@@ -410,8 +438,10 @@ export class UnityConnection extends EventEmitter {
               logger.error(`[Unity] Command ${response.id} failed:`, response.error);
               const error = new Error(response.error || 'Command failed');
               error.code = response.code || response.errorCode || 'UNITY_ERROR';
-              if (response.details !== undefined) {
-                error.details = response.details;
+              error.details = { ...response.details };
+              // Only the editor's explicit rejection can confirm an already-sent command did not start.
+              if (error.code === 'AUTH_FAILED') {
+                error.details.executionState = 'not_started';
               }
               pending.reject(error);
             } else {
@@ -449,22 +479,68 @@ export class UnityConnection extends EventEmitter {
    * @returns {Promise<any>} - Response from Unity
    */
   async sendCommand(type, params = {}, options = {}) {
-    logger.info(`[Unity] sendCommand called: ${type}`, { connected: this.connected, params });
+    const timeoutMs = normalizeTimeoutMs(options.timeoutMs, this.config.unity.commandTimeout);
+    const deadlineUnixMs = Math.min(options.deadlineUnixMs ?? Infinity, Date.now() + timeoutMs);
+    const context = commandContext.getStore();
+    const request = { ...options, timeoutMs, deadlineUnixMs, context, signal: options.signal ?? context?.signal };
+    throwIfCommandExpired(type, request);
 
     if (this.isDisconnecting) {
-      throw createConnectionClosedError('Connection is disconnecting');
+      throw withExecutionState(createConnectionClosedError('Connection is disconnecting'), 'not_started');
     }
-
     if (!this.commandInFlight) {
-      return this.runQueuedCommand(type, params, options);
+      return this.runQueuedCommand(type, params, request);
     }
 
     return new Promise((resolve, reject) => {
-      this.commandQueue.push({ type, params, options, resolve, reject });
+      const removeQueued = (error) => {
+        const index = this.commandQueue.indexOf(command);
+        if (index >= 0) {
+          this.commandQueue.splice(index, 1);
+          command.cleanup();
+          reject(error);
+        }
+      };
+      const onAbort = () => removeQueued(createCommandCancelledError(type));
+      const timeout = setTimeout(() => removeQueued(createCommandTimeoutError(type, null, timeoutMs)), deadlineUnixMs - Date.now());
+      const command = {
+        type,
+        params,
+        options: request,
+        resolve,
+        reject,
+        cleanup: () => {
+          clearTimeout(timeout);
+          request.signal?.removeEventListener('abort', onAbort);
+        }
+      };
+      this.commandQueue.push(command);
+      request.signal?.addEventListener('abort', onAbort, { once: true });
+
+      // A long-running command may be blocking the queue. Check new requests independently.
+      this.assertNotBusy().catch(removeQueued);
     });
   }
 
-  async runQueuedCommand(type, params, options = {}) {
+  async getUnityStatus() {
+    return getUnityStatus(this.config.unity, this.endpoint);
+  }
+
+  async assertNotBusy() {
+    let status;
+    try {
+      status = await this.getUnityStatus();
+    } catch (error) {
+      logger.warn(`[Unity] Could not read editor activity: ${error.message}`);
+      return;
+    }
+    const busyError = createUnityBusyError(status);
+    if (busyError) {
+      throw busyError;
+    }
+  }
+
+  async runQueuedCommand(type, params, options) {
     this.commandInFlight = true;
     try {
       return await this.sendCommandWithAuthRecovery(type, params, options);
@@ -480,112 +556,129 @@ export class UnityConnection extends EventEmitter {
     }
 
     const next = this.commandQueue.shift();
+    next.cleanup();
     this.runQueuedCommand(next.type, next.params, next.options).then(next.resolve, next.reject);
   }
 
-  async sendCommandWithAuthRecovery(type, params = {}, options = {}) {
+  async sendCommandWithAuthRecovery(type, params, options) {
     const maxAttempts = Math.max(1, Math.floor(options.authRetryAttempts || this.config.unity.authRetryAttempts || 2));
-    let lastError = null;
 
-    for (var attempt = 1; attempt <= maxAttempts; attempt++)
-    {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await this.sendCommandNow(type, params, options);
       } catch (error) {
-        lastError = error;
         if (!isAuthFailureError(error) || attempt >= maxAttempts) {
           throw error;
         }
 
-        logger.warn(`[Unity] Command ${type} failed with AUTH_FAILED; refreshing Unity endpoint before retry`);
-        await this.recoverFromAuthFailure();
+        // AUTH_FAILED is a definitive rejection before execution. Only this rejection is retried.
+        await beforeWriting(type, options, () => this.recoverFromAuthFailure(() => throwIfCommandExpired(type, options)));
       }
     }
-
-    throw lastError;
   }
 
-  async sendCommandNow(type, params = {}, options = {}) {
-    if (!this.connected) {
-      logger.error('[Unity] Cannot send command - not connected');
-      throw new Error('Not connected to Unity');
+  async sendCommandNow(type, params, options) {
+    await beforeWriting(type, options, async () => {
+      await this.assertNotBusy();
+      const validate = () => throwIfCommandExpired(type, options);
+      validate();
+      if (!this.connected) {
+        const error = new Error('Not connected to Unity');
+        error.code = 'NOT_CONNECTED';
+        throw error;
+      }
+
+      // Domain reload can rotate the token while keeping the same PID and port.
+      await this.refreshAuthTokenFromRegistry(validate);
+      validate();
+      await this.ensureAuthenticatedEndpoint(validate);
+    });
+    throwIfCommandExpired(type, options);
+
+    const socket = this.socket;
+    if (!this.connected || !socket || socket.destroyed || socket.writable === false) {
+      throw withExecutionState(createConnectionClosedError(), 'not_started');
     }
 
-    // Unity rotates its per-session auth token on every domain reload (recompile / entering or exiting
-    // play mode) while keeping the same pid/port and the TCP socket alive. Refresh the cached token from
-    // the registry before each command, otherwise every command after a reload fails with AUTH_FAILED.
-    await this.refreshAuthTokenFromRegistry();
-    await this.ensureAuthenticatedEndpoint();
-
     const id = String(++this.commandId);
-    const command = {
-      id,
-      type,
-      params,
-      ...(this.endpoint?.authToken && { authToken: this.endpoint.authToken })
-    };
+    const { timeoutMs, deadlineUnixMs, signal, context } = options;
+    const authToken = this.endpoint?.authToken;
+    const command = { id, type, params, deadlineUnixMs, ...(authToken && { authToken }) };
+    const framedMessage = frameMessage(command);
 
     return new Promise((resolve, reject) => {
-      const timeoutMs = normalizeTimeoutMs(options.timeoutMs, this.config.unity.commandTimeout);
-      logger.info(`[Unity] Setting up command ${id} with timeout ${timeoutMs}ms`);
-      
-      // Set up timeout
-      const timeout = setTimeout(() => {
-        if (!this.pendingCommands.has(id)) {
-          return;
-        }
-
-        const timeoutError = createCommandTimeoutError(type, id, timeoutMs);
-        logger.error(`[Unity] Command ${id} timed out after ${timeoutMs}ms`);
+      const cleanup = () => {
         this.pendingCommands.delete(id);
-        reject(timeoutError);
-        this.closeTimedOutConnection(timeoutError);
-      }, timeoutMs);
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const rejectPending = (error) => {
+        cleanup();
+        const failure = error.details?.executionState ? error : withExecutionState(error, 'unknown');
+        if (failure.details.executionState === 'unknown') {
+          failure.details.guidance = '请先核对 Unity 中的实际结果，再决定是否重试。';
+        }
+        if (context && failure.details.executionState !== 'not_started') {
+          context.mayHaveStarted = true;
+        }
+        reject(failure);
+      };
+      const onAbort = () => {
+        this.cancelSentCommand(socket, id, authToken);
+        rejectPending(createCommandCancelledError(type, id));
+      };
 
-      // Store pending command
+      const timeout = setTimeout(() => {
+        const error = createCommandTimeoutError(type, id, timeoutMs);
+        this.cancelSentCommand(socket, id, authToken);
+        rejectPending(error);
+        this.closeTimedOutConnection();
+      }, Math.max(1, deadlineUnixMs - Date.now()));
+
       this.pendingCommands.set(id, {
         resolve: (data) => {
-          logger.info(`[Unity] Command ${id} resolved successfully`);
-          clearTimeout(timeout);
+          cleanup();
           const authError = createAuthFailureError(data);
           if (authError) {
             reject(authError);
             return;
           }
-
+          if (context) {
+            context.mayHaveStarted = true;
+          }
           resolve(data);
         },
-        reject: (error) => {
-          logger.error(`[Unity] Command ${id} rejected with error:`, error.message);
-          clearTimeout(timeout);
-          reject(error);
-        }
+        reject: rejectPending
       });
+      signal?.addEventListener('abort', onAbort, { once: true });
 
-      // Send command with framing
-      const json = JSON.stringify(command);
-      const messageBuffer = Buffer.from(json, 'utf8');
-      const lengthBuffer = Buffer.allocUnsafe(4);
-      lengthBuffer.writeInt32BE(messageBuffer.length, 0);
-      
-      const framedMessage = Buffer.concat([lengthBuffer, messageBuffer]);
-      
       logger.info(`[Unity] Sending framed command ${id}: ${JSON.stringify(redactCommand(command))}`);
-      
-      this.socket.write(framedMessage, (error) => {
-        if (error) {
-          logger.error(`[Unity] Failed to write command ${id}:`, error.message);
-          this.pendingCommands.delete(id);
-          clearTimeout(timeout);
-          reject(error);
-        } else {
-          logger.info(`[Unity] Command ${id} written successfully, waiting for response...`);
-        }
-      });
+      // From the first write attempt onward, transport failures cannot establish whether Unity ran the command.
+      try {
+        socket.write(framedMessage, (error) => {
+          if (error && this.pendingCommands.has(id)) {
+            rejectPending(error);
+          }
+        });
+      } catch (error) {
+        rejectPending(error);
+      }
     });
   }
 
-  async recoverFromAuthFailure() {
+  cancelSentCommand(socket, id, authToken) {
+    if (!authToken || socket.destroyed || socket.writable === false) {
+      return;
+    }
+
+    try {
+      socket.write(frameMessage({ type: 'cancel_command', params: { commandId: id }, authToken }), () => {});
+    } catch {
+      // The command's editor-side deadline still applies if cancellation cannot be delivered.
+    }
+  }
+
+  async recoverFromAuthFailure(validate) {
     const previousEndpoint = this.endpoint
       ? {
           host: this.endpoint.host,
@@ -598,18 +691,19 @@ export class UnityConnection extends EventEmitter {
 
     for (var attempt = 0; attempt < attempts; attempt++)
     {
-      await this.refreshAuthTokenFromRegistry();
+      await this.refreshAuthTokenFromRegistry(validate);
+      validate();
       if (this.endpoint?.authToken && this.endpoint.authToken !== previousEndpoint?.authToken) {
         return;
       }
 
       if (delayMs > 0 && attempt < attempts - 1) {
         await sleep(delayMs);
+        validate();
       }
     }
 
-    this.endpoint = null;
-    const endpoint = await this.resolveEndpoint();
+    const endpoint = await this.resolveEndpoint({ validate, ignoreCached: true });
     if (!previousEndpoint || !endpoint) {
       return;
     }
@@ -627,7 +721,7 @@ export class UnityConnection extends EventEmitter {
     }
   }
 
-  async ensureAuthenticatedEndpoint() {
+  async ensureAuthenticatedEndpoint(validate) {
     if (this.endpoint?.authToken || this.config.unity.discovery?.enabled === false) {
       return;
     }
@@ -638,7 +732,7 @@ export class UnityConnection extends EventEmitter {
           port: this.endpoint.port
         }
       : null;
-    const endpoint = await this.resolveEndpoint();
+    const endpoint = await this.resolveEndpoint({ validate });
     if (!previousEndpoint || !endpoint) {
       return;
     }
@@ -656,7 +750,7 @@ export class UnityConnection extends EventEmitter {
     }
   }
 
-  closeTimedOutConnection(timeoutError) {
+  closeTimedOutConnection() {
     const socket = this.socket;
     this.connected = false;
     this.socket = null;
@@ -664,9 +758,6 @@ export class UnityConnection extends EventEmitter {
     this.messageBuffer = Buffer.alloc(0);
 
     const closeError = createConnectionClosedError('Connection closed after command timeout');
-    if (timeoutError?.details) {
-      closeError.details = timeoutError.details;
-    }
     for (const [, pending] of this.pendingCommands) {
       pending.reject(closeError);
     }
@@ -678,6 +769,9 @@ export class UnityConnection extends EventEmitter {
       socket.removeAllListeners();
       socket.destroy();
     }
+    if (this.shouldAutoReconnect()) {
+      this.scheduleReconnect();
+    }
   }
 
   /**
@@ -685,15 +779,22 @@ export class UnityConnection extends EventEmitter {
    * token on each domain reload while keeping the same pid/port, so the cached token must be re-read or
    * commands fail with AUTH_FAILED until the bridge is restarted.
    */
-  async refreshAuthTokenFromRegistry() {
+  async refreshAuthTokenFromRegistry(validate) {
     try {
       const endpoint = this.endpoint;
       if (!endpoint?.port || !endpoint?.instance?.pid) return;
-      const instances = await readUnityInstances({ includeStale: true });
+      const instances = await readUnityInstances({
+        registryDir: this.config.unity.discovery?.registryDir,
+        includeStale: true
+      });
       const fresh = instances.find(
-        (i) => Number(i.port) === Number(endpoint.port) && Number(i.pid) === Number(endpoint.instance.pid)
+        (instance) => instance.alive && instance.isBatchMode !== true && instance.isAssetImportWorker !== true &&
+          Number(instance.port) === Number(endpoint.port) &&
+          instance.pid === endpoint.instance.pid &&
+          (!endpoint.instance.processStartedAt || endpoint.instance.processStartedAt === instance.processStartedAt)
       );
-      if (fresh?.authToken && fresh.authToken !== endpoint.authToken) {
+      if (this.endpoint === endpoint && fresh?.authToken && fresh.authToken !== endpoint.authToken) {
+        validate?.();
         logger.info('[Unity] auth token rotated (domain reload) — refreshed from registry');
         this.endpoint.authToken = fresh.authToken;
         this.endpoint.instance = fresh;
@@ -747,7 +848,8 @@ function createCommandTimeoutError(type, id, timeoutMs) {
   error.details = {
     command: type,
     commandId: id,
-    timeoutMs
+    timeoutMs,
+    executionState: id ? 'unknown' : 'not_started'
   };
   return error;
 }
@@ -759,18 +861,12 @@ function createAuthFailureError(payload) {
 
   const error = new Error(payload?.message || payload?.error || 'Invalid or missing Unity Editor MCP auth token');
   error.code = 'AUTH_FAILED';
-  if (payload?.details !== undefined) {
-    error.details = payload.details;
-  }
+  error.details = { ...payload?.details, executionState: 'not_started' };
   return error;
 }
 
 function isAuthFailureError(error) {
-  if (!error) {
-    return false;
-  }
-
-  return error.code === 'AUTH_FAILED' || isAuthFailurePayload(error);
+  return error?.code === 'AUTH_FAILED' && error.details?.executionState === 'not_started';
 }
 
 function isAuthFailurePayload(payload) {
@@ -778,16 +874,57 @@ function isAuthFailurePayload(payload) {
     return false;
   }
 
-  const code = payload.code || payload.errorCode;
-  if (code === 'AUTH_FAILED') {
-    return true;
-  }
+  return (payload.code || payload.errorCode) === 'AUTH_FAILED';
+}
 
-  const message = String(payload.message || payload.error || '');
-  return message.includes('Unity Editor MCP auth token') && (
-    message.includes('Invalid') ||
-    message.includes('missing')
-  );
+function createCommandCancelledError(type, id = null) {
+  const error = new Error('Request cancelled');
+  error.code = 'REQUEST_CANCELLED';
+  error.details = { command: type, commandId: id, executionState: id ? 'unknown' : 'not_started' };
+  return error;
+}
+
+function withExecutionState(error, executionState) {
+  const result = new Error(error.message, { cause: error });
+  result.code = error.code;
+  result.details = { ...error.details, executionState };
+  return result;
+}
+
+function throwIfCommandExpired(type, options) {
+  if (options.signal?.aborted) {
+    throw createCommandCancelledError(type);
+  }
+  if (Date.now() >= options.deadlineUnixMs) {
+    throw createCommandTimeoutError(type, null, options.timeoutMs);
+  }
+}
+
+async function beforeWriting(type, options, operation) {
+  throwIfCommandExpired(type, options);
+  const { signal, deadlineUnixMs, timeoutMs } = options;
+  let timeout;
+  let onAbort;
+  try {
+    const invalidated = new Promise((_, reject) => {
+      onAbort = () => reject(createCommandCancelledError(type));
+      signal?.addEventListener('abort', onAbort, { once: true });
+      timeout = setTimeout(() => reject(createCommandTimeoutError(type, null, timeoutMs)), deadlineUnixMs - Date.now());
+    });
+    await Promise.race([operation(), invalidated]);
+  } catch (error) {
+    throw error.details?.executionState ? error : withExecutionState(error, 'not_started');
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+function frameMessage(command) {
+  const message = Buffer.from(JSON.stringify(command), 'utf8');
+  const length = Buffer.allocUnsafe(4);
+  length.writeInt32BE(message.length);
+  return Buffer.concat([length, message]);
 }
 
 function normalizeTimeoutMs(value, fallback) {

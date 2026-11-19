@@ -5,6 +5,7 @@ import {
   McpError
 } from '@modelcontextprotocol/sdk/types.js';
 import { toMcpToolResult } from './mcpResultAdapter.js';
+import { withUnityCommandSignal } from './unityConnection.js';
 
 export function registerMcpHandlers(server, handlers, options = {}) {
   const logger = options.logger;
@@ -26,7 +27,8 @@ export function registerMcpHandlers(server, handlers, options = {}) {
     const startTime = Date.now();
     logger?.info?.(`[MCP] Tool call started: ${name}`, { args });
 
-    const result = await handler.handle(args ?? {}, createToolContext(extra));
+    const context = createToolContext(extra);
+    const result = await withUnityCommandSignal(context.signal, () => handler.handle(args ?? {}, context));
     logger?.info?.(`[MCP] Tool call completed: ${name}`, {
       status: result.status,
       durationMs: Date.now() - startTime
@@ -42,7 +44,7 @@ export function createToolContext(extra = {}) {
     requestMeta: extra._meta,
     sendProgress: async ({ progress, total, message }) => {
       const progressToken = extra._meta?.progressToken;
-      if (!progressToken || typeof extra.sendNotification !== 'function') {
+      if (progressToken == null || typeof extra.sendNotification !== 'function') {
         return;
       }
 

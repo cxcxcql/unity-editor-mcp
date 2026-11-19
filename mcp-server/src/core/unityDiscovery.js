@@ -133,9 +133,7 @@ export async function readUnityInstances(options = {}) {
       const lastSeenMs = Date.parse(data.lastSeen);
       const stale = !Number.isFinite(lastSeenMs) || now - lastSeenMs > staleAfterMs;
       const alive = isProcessAlive(data.pid);
-      const batchMode = data.isBatchMode === true;
-
-      if (!includeStale && (stale || !alive || batchMode)) {
+      if (!includeStale && (stale || !alive || !isSelectableInstance(data))) {
         continue;
       }
 
@@ -614,7 +612,7 @@ async function promoteConnectableExactMatches(instances, options) {
 }
 
 function isSelectableInstance(instance) {
-  return instance?.isBatchMode !== true;
+  return instance?.isBatchMode !== true && instance?.isAssetImportWorker !== true;
 }
 
 function isExactSelectorMatch(instance, options) {

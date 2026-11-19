@@ -38,7 +38,7 @@ export class StopToolHandler extends BaseToolHandler {
     try {
       result = await this.unityConnection.sendCommand('stop_game', params);
     } catch (error) {
-      if (isRecoverablePlayModeDisconnect(error)) {
+      if (error.details?.executionState !== 'not_started' && isRecoverablePlayModeDisconnect(error)) {
         const verified = await waitForEditorState(
           this.unityConnection,
           (candidateState) => candidateState.isPlaying === false,

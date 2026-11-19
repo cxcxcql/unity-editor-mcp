@@ -45,6 +45,7 @@ describe('UnityConnection', () => {
       config: testConfig,
       socketFactory: () => mockSocket
     });
+    connection.getUnityStatus = async () => ({ state: 'ready' });
   });
 
   afterEach(() => {
@@ -724,11 +725,12 @@ function parseFramedMessage(buffer) {
 }
 
 async function waitForSocketWrites(socket, count) {
-  for (let i = 0; i < 10; i++) {
+  const deadline = Date.now() + 250;
+  while (Date.now() < deadline) {
     if (socket.write.mock.calls.length >= count) {
       return;
     }
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
   }
 
   assert.fail(`Timed out waiting for ${count} socket write(s)`);

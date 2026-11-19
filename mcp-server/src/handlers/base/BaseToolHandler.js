@@ -1,5 +1,8 @@
 import { compileToolValidator, normalizeInputSchema, SchemaValidationError } from '../../core/schemaValidation.js';
 import { GENERIC_OBJECT_OUTPUT_SCHEMA, inferToolAnnotations } from '../../core/toolAnnotations.js';
+import { unityCommandMayHaveStarted } from '../../core/unityConnection.js';
+
+const INDEPENDENT_TOOLS = new Set(['get_unity_status', 'wait_for_compilation', 'list_unity_instances']);
 
 /**
  * Base class for all tool handlers.
@@ -55,6 +58,16 @@ export class BaseToolHandler {
       this.validate(safeParams);
       this.validateInputSchema(safeParams);
 
+      if (!INDEPENDENT_TOOLS.has(this.name)) {
+        await this.unityConnection?.assertNotBusy?.();
+      }
+      if (context.signal?.aborted) {
+        const error = new Error('Request cancelled');
+        error.code = 'REQUEST_CANCELLED';
+        error.details = { executionState: 'not_started' };
+        throw error;
+      }
+
       const result = await this.execute(safeParams, context);
 
       return {
@@ -62,14 +75,21 @@ export class BaseToolHandler {
         result: this.normalizeExecutionResult(result)
       };
     } catch (error) {
+      // A follow-up probe can be rejected after an earlier operation already reached Unity.
+      const earlierCommand = unityCommandMayHaveStarted();
+      const executionState = earlierCommand ? 'unknown' : error.details?.executionState;
+      const message = earlierCommand && error.details?.executionState === 'not_started'
+        ? '此前的 Unity 命令可能已执行，后续命令被拒绝。请先核对实际结果。'
+        : error.message;
       return {
         status: 'error',
-        error: error.message,
+        error: message,
         code: error.code || 'TOOL_ERROR',
         details: {
           tool: this.name,
           params: this.summarizeParams(safeParams),
           ...(error.details && typeof error.details === 'object' ? error.details : {}),
+          ...(executionState && { executionState }),
           validation: error instanceof SchemaValidationError ? error.errors : undefined,
           stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         }

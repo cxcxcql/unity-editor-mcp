@@ -5,7 +5,9 @@ export function toMcpToolResult(handlerResult, toolName) {
       content: [
         {
           type: 'text',
-          text: formatResultText(structuredContent)
+          text: toolName === 'get_unity_status'
+            ? JSON.stringify(structuredContent, null, 2)
+            : formatResultText(structuredContent)
         }
       ],
       structuredContent
@@ -19,6 +21,11 @@ export function toMcpToolResult(handlerResult, toolName) {
 
   if (handlerResult.details !== undefined) {
     structuredContent.details = handlerResult.details;
+    for (const key of ['state', 'executionState', 'retryAfterMs']) {
+      if (handlerResult.details?.[key] !== undefined) {
+        structuredContent[key] = handlerResult.details[key];
+      }
+    }
   }
 
   return {
