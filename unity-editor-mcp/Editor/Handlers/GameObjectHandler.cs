@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEngine.SceneManagement;
 using Newtonsoft.Json.Linq;
 
 namespace UnityEditorMCP.Handlers
@@ -326,74 +328,87 @@ namespace UnityEditorMCP.Handlers
         }
         
         /// <summary>
-        /// Finds GameObjects based on search criteria
+        /// 按名称、标签和层筛选已加载的场景对象。
         /// </summary>
+        /// <param name="parameters">检索条件、名称匹配方式以及是否跳过美术树。</param>
+        /// <returns>匹配对象数量与详情，或检索错误。</returns>
+        /// <remarks>
+        /// 遍历为 O(n)，n 为实际访问的节点数。剪枝模式按实例 ID 排序命中项，额外排序开销约为 O(m log m)，m 为命中数。
+        /// </remarks>
         public static object FindGameObjects(JObject parameters)
         {
             try
             {
-                string name = parameters["name"]?.ToString();
-                string tag = parameters["tag"]?.ToString();
-                int? layer = parameters["layer"]?.ToObject<int>();
-                bool exactMatch = parameters["exactMatch"]?.ToObject<bool>() ?? true;
-                
-                List<GameObject> results = new List<GameObject>();
-                
-                // Get all GameObjects in scene
-                GameObject[] allObjects = GameObject.FindObjectsOfType<GameObject>(true);
-                
-                foreach (var obj in allObjects)
+                string szName = parameters["name"]?.ToString();
+                string szTag = parameters["tag"]?.ToString();
+                int? nLayer = parameters["layer"]?.ToObject<int>();
+                bool bExactMatch = parameters["exactMatch"]?.ToObject<bool>() ?? true;
+                bool bSkipArtNodes = parameters["skipArtNodes"]?.ToObject<bool>() ?? true;
+
+                IEnumerable<GameObject> pCandidates;
+                if (bSkipArtNodes)
                 {
-                    bool matches = true;
-                    
-                    // Check name
-                    if (!string.IsNullOrEmpty(name))
+                    pCandidates = EnumeratePrunedSceneObjects(bIncludeInactive: true, bActiveSceneOnly: false);
+                }
+                else
+                {
+                    pCandidates = GameObject.FindObjectsOfType<GameObject>(true);
+                }
+
+                List<GameObject> listResults = new List<GameObject>();
+                foreach (GameObject pGameObject in pCandidates)
+                {
+                    bool bMatches = true;
+                    if (!string.IsNullOrEmpty(szName))
                     {
-                        if (exactMatch)
+                        if (bExactMatch)
                         {
-                            matches &= obj.name == name;
+                            bMatches &= pGameObject.name == szName;
                         }
                         else
                         {
-                            matches &= obj.name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0;
+                            bMatches &= pGameObject.name.IndexOf(szName, StringComparison.OrdinalIgnoreCase) >= 0;
                         }
                     }
-                    
-                    // Check tag
-                    if (!string.IsNullOrEmpty(tag))
+
+                    if (!string.IsNullOrEmpty(szTag))
                     {
-                        matches &= obj.CompareTag(tag);
+                        bMatches &= pGameObject.CompareTag(szTag);
                     }
-                    
-                    // Check layer
-                    if (layer.HasValue)
+
+                    if (nLayer.HasValue)
                     {
-                        matches &= obj.layer == layer.Value;
+                        bMatches &= pGameObject.layer == nLayer.Value;
                     }
-                    
-                    if (matches)
+
+                    if (bMatches)
                     {
-                        results.Add(obj);
+                        listResults.Add(pGameObject);
                     }
                 }
-                
-                // Convert results to data
-                var resultData = results.Select(obj => new
+
+                // 旧查询按实例 ID 返回，剪枝模式只需恢复命中项的相同顺序。
+                if (bSkipArtNodes)
                 {
-                    id = obj.GetInstanceID(),
-                    name = obj.name,
-                    path = GetGameObjectPath(obj),
-                    tag = obj.tag,
-                    layer = obj.layer,
-                    isActive = obj.activeSelf,
+                    listResults.Sort((pLeft, pRight) => pLeft.GetInstanceID().CompareTo(pRight.GetInstanceID()));
+                }
+
+                var resultData = listResults.Select(pGameObject => new
+                {
+                    id = pGameObject.GetInstanceID(),
+                    name = pGameObject.name,
+                    path = GetGameObjectPath(pGameObject),
+                    tag = pGameObject.tag,
+                    layer = pGameObject.layer,
+                    isActive = pGameObject.activeSelf,
                     transform = new
                     {
-                        position = new { x = obj.transform.position.x, y = obj.transform.position.y, z = obj.transform.position.z },
-                        rotation = new { x = obj.transform.rotation.eulerAngles.x, y = obj.transform.rotation.eulerAngles.y, z = obj.transform.rotation.eulerAngles.z },
-                        scale = new { x = obj.transform.localScale.x, y = obj.transform.localScale.y, z = obj.transform.localScale.z }
+                        position = new { x = pGameObject.transform.position.x, y = pGameObject.transform.position.y, z = pGameObject.transform.position.z },
+                        rotation = new { x = pGameObject.transform.rotation.eulerAngles.x, y = pGameObject.transform.rotation.eulerAngles.y, z = pGameObject.transform.rotation.eulerAngles.z },
+                        scale = new { x = pGameObject.transform.localScale.x, y = pGameObject.transform.localScale.y, z = pGameObject.transform.localScale.z }
                     }
                 }).ToList();
-                
+
                 return new
                 {
                     count = resultData.Count,
@@ -405,7 +420,111 @@ namespace UnityEditorMCP.Handlers
                 return new { error = $"Failed to find GameObjects: {ex.Message}" };
             }
         }
-        
+
+        /// <summary>
+        /// 从场景顶层逐棵遍历，跳过名称精确为 root 的节点及其后代。
+        /// </summary>
+        /// <param name="bIncludeInactive">是否检索非激活对象。</param>
+        /// <param name="bActiveSceneOnly">是否沿用组件查找包含非激活对象时的活动场景范围及隐藏标记规则。</param>
+        /// <returns>可以进入名称或组件匹配的场景对象。</returns>
+        /// <remarks>
+        /// 时间复杂度约为 O(n)，n 为实际访问的节点数。临时列表和栈保存场景顶层对象及待处理的子节点。
+        /// </remarks>
+        internal static IEnumerable<GameObject> EnumeratePrunedSceneObjects(bool bIncludeInactive, bool bActiveSceneOnly)
+        {
+            IEnumerable<Scene> pScenes;
+            if (bActiveSceneOnly)
+            {
+                pScenes = new[] { SceneManager.GetActiveScene() };
+            }
+            else
+            {
+                pScenes = GetMainStageSearchScenes();
+            }
+
+            List<GameObject> listRoots = new List<GameObject>();
+            Stack<Transform> pPending = new Stack<Transform>();
+
+            foreach (Scene pScene in pScenes)
+            {
+                if (!pScene.IsValid() || !pScene.isLoaded)
+                {
+                    continue;
+                }
+
+                pScene.GetRootGameObjects(listRoots);
+                foreach (GameObject pRoot in listRoots)
+                {
+                    pPending.Push(pRoot.transform);
+                    while (pPending.Count > 0)
+                    {
+                        Transform pTransform = pPending.Pop();
+                        GameObject pGameObject = pTransform.gameObject;
+                        if (pGameObject.name == "root" || (!bIncludeInactive && !pGameObject.activeInHierarchy))
+                        {
+                            continue;
+                        }
+
+                        // 保存标记仅决定本节点是否返回，子节点仍按各自的标记判断。
+                        if (bActiveSceneOnly || (pGameObject.hideFlags & HideFlags.DontSave) == 0)
+                        {
+                            yield return pGameObject;
+                        }
+
+                        for (int nIndex = pTransform.childCount - 1; nIndex >= 0; --nIndex)
+                        {
+                            pPending.Push(pTransform.GetChild(nIndex));
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 收集主舞台的场景以及播放期间的常驻场景。
+        /// </summary>
+        /// <returns>供顶层节点检索的场景列表。</returns>
+        /// <remarks>时间复杂度为 O(n)，n 为已打开的场景数，层级窗口查询只访问折叠后的场景标题。</remarks>
+        private static List<Scene> GetMainStageSearchScenes()
+        {
+            int nSceneCount = SceneManager.sceneCount;
+            List<Scene> listScenes = new List<Scene>(nSceneCount + 1);
+            for (int nIndex = 0; nIndex < nSceneCount; ++nIndex)
+            {
+                Scene pScene = SceneManager.GetSceneAt(nIndex);
+                if (pScene.IsValid() && !EditorSceneManager.IsPreviewScene(pScene))
+                {
+                    listScenes.Add(pScene);
+                }
+            }
+
+            if (Application.isPlaying)
+            {
+                // Unity 2020.3 在层级窗口中单独展示常驻场景。保持所有标题折叠即可取得场景，无须创建临时对象。
+                HierarchyProperty pHierarchy = new HierarchyProperty(HierarchyType.GameObjects, forceImport: false)
+                {
+                    showSceneHeaders = true
+                };
+                int[] arrExpanded = Array.Empty<int>();
+                while (pHierarchy.Next(arrExpanded))
+                {
+                    if (!pHierarchy.isSceneHeader)
+                    {
+                        continue;
+                    }
+
+                    Scene pScene = pHierarchy.GetScene();
+                    if (pScene.IsValid() && pScene.name == "DontDestroyOnLoad" && !listScenes.Contains(pScene))
+                    {
+                        listScenes.Add(pScene);
+                        break;
+                    }
+                }
+            }
+
+            return listScenes;
+        }
+
         /// <summary>
         /// Deletes GameObject(s)
         /// </summary>

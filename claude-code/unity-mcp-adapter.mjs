@@ -294,12 +294,14 @@ const TOOLS = [
 
   tool(
     'find_gameobject',
-    'Find GameObjects by name, tag, or layer. Params: name, tag, layer, exactMatch (bool, default true).',
+    'Find GameObjects by name, tag, or layer. Params: name, tag, layer, exactMatch (bool, default true). ' +
+      'By default, skips objects named exactly "root" and their descendants. Set skipArtNodes=false to include them.',
     {
       name: { type: 'string' },
       tag: { type: 'string' },
       layer: { type: 'integer' },
       exactMatch: { type: 'boolean' },
+      skipArtNodes: { type: 'boolean' },
     }
   ),
 
@@ -352,12 +354,14 @@ const TOOLS = [
 
   tool(
     'find_by_component',
-    'Find objects by component type. Params: componentType, includeInactive (bool), searchScope (scene|project), matchExactType (bool).',
+    'Find objects by component type. Params: componentType, includeInactive (bool), searchScope (scene|prefabs|all), matchExactType (bool). ' +
+      'Scene searches skip objects named exactly "root" and their descendants by default. Set skipArtNodes=false to include them.',
     {
       componentType: { type: 'string' },
       includeInactive: { type: 'boolean' },
-      searchScope: { type: 'string' },
+      searchScope: { type: 'string', enum: ['scene', 'prefabs', 'all'] },
       matchExactType: { type: 'boolean' },
+      skipArtNodes: { type: 'boolean' },
     }
   ),
 

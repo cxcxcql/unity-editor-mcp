@@ -938,91 +938,106 @@ namespace UnityEditorMCP.Handlers
         }
 
         /// <summary>
-        /// Finds all GameObjects that have a specific component type
+        /// 在场景或预制资源中查找挂有指定类型组件的对象。
         /// </summary>
+        /// <param name="parameters">组件类型、查找范围、非激活对象与派生类型的筛选条件，以及场景美术树开关。</param>
+        /// <returns>命中详情、数量与摘要，或检索错误。</returns>
+        /// <remarks>
+        /// 场景遍历约为 O(n)，n 为实际访问的节点数，另有组件检查及命中项路径排序。搜索预制时会枚举、加载预制资源并检查其组件。
+        /// </remarks>
         public static object FindByComponent(JObject parameters)
         {
             try
             {
-                // Get parameters
-                var componentType = parameters["componentType"]?.ToString();
-                var includeInactive = parameters["includeInactive"]?.ToObject<bool>() ?? true;
-                var searchScope = parameters["searchScope"]?.ToString() ?? "scene";
-                var matchExactType = parameters["matchExactType"]?.ToObject<bool>() ?? true;
+                string szComponentType = parameters["componentType"]?.ToString();
+                bool bIncludeInactive = parameters["includeInactive"]?.ToObject<bool>() ?? true;
+                string szSearchScope = parameters["searchScope"]?.ToString() ?? "scene";
+                bool bMatchExactType = parameters["matchExactType"]?.ToObject<bool>() ?? true;
 
                 // Validate input
-                if (string.IsNullOrEmpty(componentType))
+                if (string.IsNullOrEmpty(szComponentType))
                 {
                     return new { error = "componentType is required" };
                 }
 
-                // Validate searchScope
-                if (searchScope != "scene" && searchScope != "prefabs" && searchScope != "all")
+                // 校验查找范围。
+                if (szSearchScope != "scene" && szSearchScope != "prefabs" && szSearchScope != "all")
                 {
                     return new { error = "Invalid searchScope. Must be one of: scene, prefabs, all" };
                 }
 
                 // Get the component type
-                var targetType = GetTypeByName(componentType);
+                Type targetType = GetTypeByName(szComponentType);
                 if (targetType == null)
                 {
-                    return new { error = $"Invalid component type: {componentType}" };
+                    return new { error = $"Invalid component type: {szComponentType}" };
                 }
 
                 if (!typeof(Component).IsAssignableFrom(targetType))
                 {
-                    return new { error = $"{componentType} is not a Component type" };
+                    return new { error = $"{szComponentType} is not a Component type" };
                 }
 
                 var results = new List<Dictionary<string, object>>();
                 var sceneCount = 0;
                 var prefabCount = 0;
 
-                // Search in scene
-                if (searchScope == "scene" || searchScope == "all")
+                // 保持旧查询的范围：包含非激活对象时只搜索活动场景，否则搜索所有场景中的激活对象。
+                if (szSearchScope == "scene" || szSearchScope == "all")
                 {
-                    var sceneObjects = includeInactive
-                        ? Resources.FindObjectsOfTypeAll<GameObject>()
-                            .Where(go => go.scene.IsValid() && go.scene == UnityEngine.SceneManagement.SceneManager.GetActiveScene())
-                            .ToArray()
-                        : GameObject.FindObjectsOfType<GameObject>();
-
-                    foreach (var go in sceneObjects)
+                    bool bSkipArtNodes = parameters["skipArtNodes"]?.ToObject<bool>() ?? true;
+                    IEnumerable<GameObject> pSceneObjects;
+                    if (bSkipArtNodes)
                     {
-                        var components = matchExactType
-                            ? go.GetComponents(targetType).Where(c => c != null && c.GetType() == targetType).ToArray()
-                            : go.GetComponents(targetType);
+                        pSceneObjects = GameObjectHandler.EnumeratePrunedSceneObjects(bIncludeInactive, bActiveSceneOnly: bIncludeInactive);
+                    }
+                    else if (bIncludeInactive)
+                    {
+                        pSceneObjects = Resources.FindObjectsOfTypeAll<GameObject>()
+                            .Where(pGameObject => pGameObject.scene.IsValid() && pGameObject.scene == UnityEngine.SceneManagement.SceneManager.GetActiveScene())
+                            .ToArray();
+                    }
+                    else
+                    {
+                        pSceneObjects = GameObject.FindObjectsOfType<GameObject>();
+                    }
 
-                        if (components.Length > 0)
+                    foreach (GameObject pGameObject in pSceneObjects)
+                    {
+                        Component[] arrComponents = bMatchExactType
+                            ? pGameObject.GetComponents(targetType).Where(c => c != null && c.GetType() == targetType).ToArray()
+                            : pGameObject.GetComponents(targetType);
+
+                        if (arrComponents.Length > 0)
                         {
-                            var result = new Dictionary<string, object>();
-                            result["gameObject"] = go.name;
-                            result["path"] = GetGameObjectPath(go);
-                            result["componentCount"] = components.Length;
-                            result["isActive"] = go.activeInHierarchy;
+                            Dictionary<string, object> dicResult = new Dictionary<string, object>();
+                            dicResult["gameObject"] = pGameObject.name;
+                            dicResult["path"] = GetGameObjectPath(pGameObject);
+                            dicResult["componentCount"] = arrComponents.Length;
+                            dicResult["isActive"] = pGameObject.activeInHierarchy;
 
-                            if (!matchExactType)
+                            if (!bMatchExactType)
                             {
-                                // Include actual component types found
-                                result["componentTypes"] = components
+                                // 返回命中的实际组件类型。
+                                dicResult["componentTypes"] = arrComponents
                                     .Select(c => c.GetType().Name)
                                     .Distinct()
                                     .ToArray();
                             }
 
-                            if (searchScope == "all")
+                            if (szSearchScope == "all")
                             {
-                                result["location"] = "scene";
+                                dicResult["location"] = "scene";
                             }
 
-                            results.Add(result);
+                            results.Add(dicResult);
                             sceneCount++;
                         }
                     }
                 }
 
                 // Search in prefabs
-                if (searchScope == "prefabs" || searchScope == "all")
+                if (szSearchScope == "prefabs" || szSearchScope == "all")
                 {
                     var guids = AssetDatabase.FindAssets("t:Prefab");
                     foreach (var guid in guids)
@@ -1032,11 +1047,11 @@ namespace UnityEditorMCP.Handlers
                         
                         if (prefab == null) continue;
 
-                        var components = matchExactType
-                            ? prefab.GetComponentsInChildren(targetType, includeInactive)
+                        var components = bMatchExactType
+                            ? prefab.GetComponentsInChildren(targetType, bIncludeInactive)
                                 .Where(c => c != null && c.GetType() == targetType)
                                 .ToArray()
-                            : prefab.GetComponentsInChildren(targetType, includeInactive);
+                            : prefab.GetComponentsInChildren(targetType, bIncludeInactive);
 
                         if (components.Length > 0)
                         {
@@ -1046,7 +1061,7 @@ namespace UnityEditorMCP.Handlers
                             result["componentCount"] = components.Length;
                             result["isActive"] = prefab.activeSelf;
 
-                            if (!matchExactType)
+                            if (!bMatchExactType)
                             {
                                 // Include actual component types found
                                 result["componentTypes"] = components
@@ -1055,7 +1070,7 @@ namespace UnityEditorMCP.Handlers
                                     .ToArray();
                             }
 
-                            if (searchScope == "all")
+                            if (szSearchScope == "all")
                             {
                                 result["location"] = "prefab";
                             }
@@ -1074,13 +1089,13 @@ namespace UnityEditorMCP.Handlers
 
                 // Build result
                 var finalResult = new Dictionary<string, object>();
-                finalResult["componentType"] = componentType;
-                finalResult["searchScope"] = searchScope;
+                finalResult["componentType"] = szComponentType;
+                finalResult["searchScope"] = szSearchScope;
                 finalResult["results"] = results;
                 finalResult["totalFound"] = results.Count;
                 finalResult["activeCount"] = activeCount;
 
-                if (searchScope == "all")
+                if (szSearchScope == "all")
                 {
                     finalResult["sceneCount"] = sceneCount;
                     finalResult["prefabCount"] = prefabCount;
@@ -1090,19 +1105,19 @@ namespace UnityEditorMCP.Handlers
                 string summary;
                 if (results.Count == 0)
                 {
-                    summary = $"No GameObjects found with {componentType} component";
+                    summary = $"No GameObjects found with {szComponentType} component";
                 }
                 else
                 {
-                    var typeText = matchExactType ? componentType : $"{componentType}-derived";
+                    string typeText = bMatchExactType ? szComponentType : $"{szComponentType}-derived";
                     
-                    if (searchScope == "scene")
+                    if (szSearchScope == "scene")
                     {
                         summary = $"Found {results.Count} GameObject{(results.Count != 1 ? "s" : "")} with {typeText} component";
                     }
-                    else if (searchScope == "prefabs")
+                    else if (szSearchScope == "prefabs")
                     {
-                        summary = $"Found {results.Count} prefab{(results.Count != 1 ? "s" : "")} with {typeText} component{(matchExactType ? "" : "s")}";
+                        summary = $"Found {results.Count} prefab{(results.Count != 1 ? "s" : "")} with {typeText} component{(bMatchExactType ? "" : "s")}";
                     }
                     else // all
                     {

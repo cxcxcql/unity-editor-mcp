@@ -29,6 +29,10 @@ export class FindGameObjectToolHandler extends BaseToolHandler {
           exactMatch: {
             type: 'boolean',
             description: 'Whether to match name exactly (default: true)'
+          },
+          skipArtNodes: {
+            type: 'boolean',
+            description: 'Skip objects named exactly "root" and their descendants (default: true)'
           }
         },
         required: []

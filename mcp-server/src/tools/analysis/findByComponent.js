@@ -18,11 +18,15 @@ export const findByComponentToolDefinition = {
             searchScope: {
                 type: 'string',
                 enum: ['scene', 'prefabs', 'all'],
-                description: 'Where to search: current scene, prefabs, or all. Default: "scene"'
+                description: 'Search scene objects, prefab assets, or both. Default: "scene"'
             },
             matchExactType: {
                 type: 'boolean',
                 description: 'Match exact type only (not derived types). Default: true'
+            },
+            skipArtNodes: {
+                type: 'boolean',
+                description: 'Skip scene objects named exactly "root" and their descendants (default: true)'
             }
         },
         required: ['componentType']
